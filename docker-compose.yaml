@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  # PostgreSQL service for storing MLflow metadata
+  postgres:
+    build: "./dockerfiles/postgres"
+    image: postgres_system
+    container_name: postgres
+    restart: always
+    environment:
+      POSTGRES_USER: airflow  # Username for PostgreSQL
+      POSTGRES_PASSWORD: airflow  # Password for the PostgreSQL user
+      POSTGRES_DB: mlflow_db  # Name of the database to create
+    ports:
+      - "5432:5432"  # Maps PostgreSQL port to the host
+    volumes:
+      - db_data:/var/lib/postgresql/data  # Persistent volume for PostgreSQL data
+    networks:
+      - backend  # Connects PostgreSQL to the backend network
+    healthcheck:
+      # Healthcheck to ensure PostgreSQL is ready before other services start
+      interval: 60s
+      test: ["CMD", "pg_isready", "-U", "airflow"] 
+      timeout: 20s
+      retries: 3
+
+  # MinIO service to act as an S3-compatible storage for MLflow artifacts
+  minio:
+    image: minio/minio:latest  # Uses the official MinIO image
+    container_name: minio
+    restart: always
+    environment:
+      MINIO_ACCESS_KEY: minio  # Access key for MinIO 
+      MINIO_SECRET_KEY: minio123  # Secret key for MinIO 
+    command: server /data --console-address ":9001"  # Starts MinIO with the console accessible at :9001
+    ports:
+      - "9000:9000"  # Maps MinIO's main service port
+      - "9001:9001"  # Maps MinIO's console port
+    volumes:
+      - minio_data:/data  # Persistent volume for MinIO storage
+    networks:
+      - backend  # Connects MinIO to the backend network
+      - frontend  # Connects MinIO to the frontend network for potential external access
+    healthcheck:
+      # Healthcheck to ensure MinIO is ready before other services start
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]  
+      interval: 60s
+      timeout: 20s
+      retries: 3
+
+  # MLflow service for tracking experiments and storing artifacts
+  mlflow:
+    build: "./dockerfiles/mlflow"  # Builds the MLflow image from the Dockerfile in the specified path
+    image: mlflow
+    container_name: mlflow
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy  # Ensures MLflow only starts after PostgreSQL is ready
+      minio:
+        condition: service_healthy  # Ensures MLflow only starts after MinIO is ready
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000  # URL for the MinIO service (acts as the S3 storage)
+      AWS_ACCESS_KEY_ID: minio  # MinIO access key
+      AWS_SECRET_ACCESS_KEY: minio123  # MinIO secret key
+      # PostgreSQL connection string for MLflow metadata
+      BACKEND_STORE_URI: postgresql://airflow:airflow@postgres:5432/mlflow_db  
+      ARTIFACT_ROOT: s3://mlflow/  # Root location for storing artifacts in MinIO
+    ports:
+      - "5000:5000"  # Maps MLflow's UI port to the host
+    networks:
+      - backend  # Connects MLflow to the backend network
+      - frontend  # Connects MLflow to the frontend network
+    command: >
+      mlflow server 
+      --backend-store-uri ${BACKEND_STORE_URI} 
+      --default-artifact-root ${ARTIFACT_ROOT} 
+      --host 0.0.0.0  # Runs the MLflow server accessible from any network interface
+
+networks:
+  backend:  # Internal network for service-to-service communication
+  frontend:  # Network for services that may need external access
+
+volumes:
+  db_data:  # Volume for persisting PostgreSQL data
+  minio_data:  # Volume for persisting MinIO data
