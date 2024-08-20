@@ -1,23 +1,20 @@
-# Set the Python version
+# Base image
 FROM python:3.11-slim
 
-# Set the working directory
+# Set working directory
 WORKDIR /app
 
-# Update the package list and install wget
-RUN apt-get update && apt-get install -y --no-install-recommends wget
+# Copy requirements file
+COPY requirements.txt /app/requirements.txt
 
-# Upgrade pip to the latest version
-RUN pip install --upgrade pip
+# Install system dependencies and Python packages
+RUN apt-get update && apt-get install -y wget \
+    && pip install --upgrade pip \
+    && pip install mlflow[extras] psycopg2-binary boto3 cryptography pymysql \
+    && pip install --no-cache-dir -r /app/requirements.txt
 
-# Install MLflow with extras and other required packages
-RUN pip install mlflow[extras] psycopg2-binary boto3 cryptography pymysql
-
-# Copy the rest of the application code
-COPY . /app
-
-# Expose port 5000, the default port for MLflow
+# Expose port 5000
 EXPOSE 5000
 
-# Command to run the MLflow server
+# Command to run MLflow server
 CMD ["mlflow", "server", "--host", "0.0.0.0"]
