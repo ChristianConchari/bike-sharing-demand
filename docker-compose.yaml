@@ -2,85 +2,103 @@ version: '3.8'
 
 services:
   # PostgreSQL service for storing MLflow metadata
-  bike_postgres:
-    build: "./dockerfiles/postgres"
-    image: bike_postgres_system
-    container_name: bike_postgres
+  postgres:
     restart: always
-    environment:
-      POSTGRES_USER: bike_airflow  # Username for PostgreSQL
-      POSTGRES_PASSWORD: bike_airflow  # Password for the PostgreSQL user
-      POSTGRES_DB: bike_mlflow_db  # Name of the database to create
+    image: postgres
+    container_name: postgres
     ports:
-      - "5433:5432"  # Maps PostgreSQL port to the host (changed to 5433 to avoid conflict)
-    volumes:
-      - bike_db_data:/var/lib/postgresql/data  # Persistent volume for PostgreSQL data
+      - "${PG_PORT:-5432}:5432"
     networks:
-      - backend  # Connects PostgreSQL to the backend network
-    healthcheck:
-      # Healthcheck to ensure PostgreSQL is ready before other services start
-      interval: 60s
-      test: ["CMD", "pg_isready", "-U", "bike_airflow"] 
-      timeout: 20s
-      retries: 3
-
-  # MinIO service to act as an S3-compatible storage for MLflow artifacts
-  bike_minio:
-    image: minio/minio:latest  # Uses the official MinIO image
-    container_name: bike_minio
-    restart: always
+      - backend
     environment:
-      MINIO_ACCESS_KEY: bike_minio  # Access key for MinIO (made unique)
-      MINIO_SECRET_KEY: bike_minio123  # Secret key for MinIO (made unique)
-    command: server /data --console-address ":9001"  # Starts MinIO with the console accessible at :9001
-    ports:
-      - "9002:9000"  # Maps MinIO's main service port (changed to 9002 to avoid conflict)
-      - "9003:9001"  # Maps MinIO's console port (changed to 9003 to avoid conflict)
+      - POSTGRES_USER=${PG_USER:-postgres}
+      - POSTGRES_PASSWORD=${PG_PASSWORD:-postgres}
+      - POSTGRES_HOST=postgres  # Internal Docker hostname for PostgreSQL
+      - POSTGRES_DB=${PG_DATABASE:-mlflow_db}
+      - POSTGRES_PORT=${PG_PORT:-5432}
     volumes:
-      - bike_minio_data:/data  # Persistent volume for MinIO storage
-    networks:
-      - backend  # Connects MinIO to the backend network
-      - frontend  # Connects MinIO to the frontend network for potential external access
+      - db_data:/var/lib/postgresql/data  # Persistent storage for PostgreSQL data
     healthcheck:
-      # Healthcheck to ensure MinIO is ready before other services start
-      test: ["CMD", "curl", "-f", "http://localhost:9002/minio/health/live"]  
+      test: ["CMD", "pg_isready", "-p", "5432", "-U", "${PG_USER:-postgres}"]
       interval: 60s
       timeout: 20s
       retries: 3
 
-  # MLflow service for tracking experiments and storing artifacts
-  bike_mlflow:
-    build: "./dockerfiles/mlflow"  # Builds the MLflow image from the Dockerfile in the specified path
-    image: bike_mlflow
-    container_name: bike_mlflow
+  # MinIO service for S3-compatible storage
+  s3:
     restart: always
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_PORT_UI:-9001}:9001"
+    networks:
+      - backend
+    environment:
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minio}  # Access key for MinIO
+      - MINIO_SECRET_KEY=${MINIO_SECRET_ACCESS_KEY:-minio123}  # Secret key for MinIO
+    volumes:
+      - minio_data:/data  # Persistent storage for MinIO data
+    command: server /data --console-address :9001  # Start MinIO with admin console on port 9001
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+
+  # Service to initialize MinIO buckets
+  create_s3_buckets:
+    image: minio/mc:latest
+    container_name: minio_create_bucket
     depends_on:
-      bike_postgres:
-        condition: service_healthy  # Ensures MLflow only starts after PostgreSQL is ready
-      bike_minio:
-        condition: service_healthy  # Ensures MLflow only starts after MinIO is ready
-    environment:
-      MLFLOW_S3_ENDPOINT_URL: http://bike_minio:9000  # URL for the MinIO service (acts as the S3 storage)
-      AWS_ACCESS_KEY_ID: bike_minio  # MinIO access key (made unique)
-      AWS_SECRET_ACCESS_KEY: bike_minio123  # MinIO secret key (made unique)
-      # PostgreSQL connection string for MLflow metadata
-      BACKEND_STORE_URI: postgresql://bike_airflow:bike_airflow@bike_postgres:5432/bike_mlflow_db  
-      ARTIFACT_ROOT: s3://bike_mlflow/  # Root location for storing artifacts in MinIO
-    ports:
-      - "5001:5000"  # Maps MLflow's UI port to the host (changed to 5001 to avoid conflict)
+      - s3  # Ensure MinIO is ready before creating buckets
     networks:
-      - backend  # Connects MLflow to the backend network
-      - frontend  # Connects MLflow to the frontend network
+      - backend
+    entrypoint: >
+      /bin/sh -c '
+      sleep 5;
+      /usr/bin/mc config host add s3 http://s3:9000 ${MINIO_ACCESS_KEY:-minio} ${MINIO_SECRET_ACCESS_KEY:-minio123} --api S3v4;
+      [[ ! -z "`/usr/bin/mc ls s3 | grep ${MLFLOW_BUCKET_NAME:-mlflow}`" ]] || /usr/bin/mc mb s3/${MLFLOW_BUCKET_NAME:-mlflow};
+      /usr/bin/mc policy set download s3/${MLFLOW_BUCKET_NAME:-mlflow};
+      exit 0;
+      '
+
+  # MLflow service
+  mlflow:
+    restart: always
+    build: "./dockerfiles/mlflow"  # Build the MLflow image from the specified Dockerfile
+    image: mlflow
+    container_name: mlflow
+    depends_on:
+      postgres:
+        condition: service_healthy  # Ensure PostgreSQL is healthy before starting MLflow
+      create_s3_buckets:
+        condition: service_completed_successfully  # Ensure MinIO buckets are created before starting MLflow
+    ports:
+      - "${MLFLOW_PORT:-5000}:5000"
+    networks:
+      - backend
+    environment:
+      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-minio}  # MinIO access key for MLflow
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_ACCESS_KEY:-minio123}  # MinIO secret key for MLflow
+      - MLFLOW_S3_ENDPOINT_URL=http://s3:9000  # Endpoint URL for S3 (MinIO)
+      - BACKEND_STORE_URI=postgresql://${PG_USER:-postgres}:${PG_PASSWORD:-postgres}@postgres:5432/${PG_DATABASE:-mlflow_db}  # URI for PostgreSQL
+      - ARTIFACT_ROOT=s3://${MLFLOW_BUCKET_NAME:-mlflow}/  # Root path for storing MLflow artifacts in S3 (MinIO)
     command: >
       mlflow server 
       --backend-store-uri ${BACKEND_STORE_URI} 
       --default-artifact-root ${ARTIFACT_ROOT} 
-      --host 0.0.0.0  # Runs the MLflow server accessible from any network interface
+      --host 0.0.0.0
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://mlflow:5000 || exit 1  # Check if MLflow server is reachable
+      interval: 60s
+      timeout: 10s
+      retries: 3
 
 networks:
-  backend:  # Internal network for service-to-service communication
-  frontend:  # Network for services that may need external access
+  backend:
+    driver: bridge
 
 volumes:
-  bike_db_data:  # Volume for persisting PostgreSQL data
-  bike_minio_data:  # Volume for persisting MinIO data
+  db_data:
+  minio_data:
