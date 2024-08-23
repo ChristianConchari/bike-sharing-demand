@@ -225,6 +225,7 @@ def etl_processing():
         """
         Generate a dataset split into a training part and a test part
         """
+        from sklearn.model_selection import train_test_split
         # Processed dataset path
         data_processed_path = 's3://mlflow/data/processed/bike_sharing_processed.csv'
         
@@ -251,6 +252,7 @@ def etl_processing():
 
     @task()
     def normalize_data():
+        from sklearn.preprocessing import StandardScaler
         # Save the training and testing datasets to S3
         X_train_path = 's3://mlflow/data/train/bike_sharing_X_train.csv'
         X_test_path = 's3://mlflow/data/test/bike_sharing_X_test.csv'
