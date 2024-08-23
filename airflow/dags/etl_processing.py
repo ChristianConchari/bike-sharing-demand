@@ -6,6 +6,16 @@ from datetime import timedelta
 from airflow.decorators import dag, task
 import pandas as pd
 import awswrangler as wr
+import os
+import sys
+
+# Get the absolute path of the src directory
+src_path = os.path.abspath(os.path.join(os.getcwd(), '..', 'src'))
+# Add the src directory to the Python path
+sys.path.append(src_path)
+
+# Now you can import your functions
+from encoding_functions import cyclic_encode, label_encode, one_hot_encode
 
 MARKDOWN_TEXT = """
 # ETL Pipeline
@@ -52,14 +62,6 @@ def etl_processing():
         """
         Perform feature engineering on the dataset
         """
-        # Get the absolute path of the src directory
-        src_path = os.path.abspath(os.path.join(os.getcwd(), '..', 'src'))
-        # Add the src directory to the Python path
-        sys.path.append(src_path)
-
-        # Now you can import your functions
-        from encoding_functions import cyclic_encode, label_encode, one_hot_encode
-        
         # Set paths for the original and processed data
         data_original_path = 's3://mlflow/data/raw/bike_sharing_raw.csv'
         data_processed_path = 's3://mlflow/data/processed/bike_sharing_processed.csv'
@@ -114,6 +116,9 @@ def etl_processing():
 
         # Drop the identified columns
         df = df.drop(columns=to_drop)
+        
+        # Tracking categorical columns before encoding
+        original_categorical_columns = ['holiday', 'workingday', 'year', 'weather', 'month', 'weekday', 'hour']
 
         # Encode using label encoding
         df = label_encode(df, ['holiday', 'workingday', 'year'])
@@ -124,3 +129,121 @@ def etl_processing():
         
         # Save the processed dataset to S3
         wr.s3.to_csv(df, data_processed_path, index=False)
+
+        client = boto3.client('s3')
+        data_dict = {}
+        
+        try:
+            client.head_object(Bucket='mlflow', Key='data_info/bike_sharing_data_info.json')
+            result = client.get_object(Bucket='mlflow', Key='data_info/bike_sharing_data_info.json')
+            text = result["Body"].read().decode()
+            data_dict = json.loads(text)
+        except botocore.exceptions.ClientError as e:
+            if e.response['Error']['Code'] != "404":
+                raise e
+
+        target_col = 'log_count'
+        dataset_log = df.drop(columns=target_col)
+
+        # Save information about the dataset
+        data_dict['columns'] = dataset_log.columns.to_list()
+        data_dict['target_col'] = target_col
+        
+        # Track original categorical columns
+        data_dict['original_categorical_columns'] = original_categorical_columns
+
+        # Track encoded columns
+        data_dict['label_encoded_columns'] = label_encoded_columns
+        data_dict['one_hot_encoded_columns'] = {col: df.filter(like=f'{col}_').columns.to_list() for col in one_hot_encoded_columns}
+        data_dict['cyclic_encoded_columns'] = cyclic_encoded_columns
+
+        # Track data types
+        data_dict['columns_dtypes'] = {k: str(v) for k, v in dataset_log.dtypes.to_dict().items()}
+        
+        # Tracking details of label encoding, one-hot encoding, and cyclic encoding
+        label_encoded_dict = {}
+        one_hot_encoded_dict = {}
+        cyclic_encoded_dict = {}
+
+        # Tracking unique values for label encoded columns
+        for col in label_encoded_columns:
+            label_encoded_dict[col] = df[col].unique().tolist()
+
+        # Tracking one-hot encoded columns and their resulting dummy variables
+        for col in one_hot_encoded_columns:
+            one_hot_encoded_dict[col] = df.filter(like=f'{col}_').columns.to_list()
+
+        # Tracking original values and transformed values for cyclically encoded columns
+        for col in cyclic_encoded_columns:
+            cyclic_encoded_dict[col] = {
+                'original_values': df[col].unique().tolist(),
+                'transformed_columns': [f'{col}_sin', f'{col}_cos']
+            }
+
+        # Adding these details to the data dictionary
+        data_dict['label_encoded_columns'] = label_encoded_dict
+        data_dict['one_hot_encoded_columns'] = one_hot_encoded_dict
+        data_dict['cyclic_encoded_columns'] = cyclic_encoded_dict
+
+        # Track the date and time the data was processed
+        data_dict['date'] = datetime.datetime.today().strftime('%Y/%m/%d-%H:%M:%S"')
+        data_string = json.dumps(data_dict, indent=2)
+
+        # Save the data dictionary to S3
+        client.put_object(
+            Bucket='mlflow',
+            Key='data_info/bike_sharing_data_info.json',
+            Body=data_string
+        )
+
+        # Log the data dictionary to MLflow
+        mlflow.set_tracking_uri('http://mlflow:5000')
+        experiment = mlflow.set_experiment("Bike Sharing Demand")
+
+        # Start a new MLflow run
+        mlflow.start_run(run_name='Feature_Engineering_' + datetime.datetime.today().strftime('%Y/%m/%d-%H:%M:%S"'),
+                        experiment_id=experiment.experiment_id,
+                        tags={"experiment": "feature_engineering", "dataset": "Bike Sharing"},
+                        log_system_metrics=True)
+        
+        # Log the processed dataset to MLflow
+        mlflow_dataset = mlflow.data.from_pandas(df,
+                                                source="s3://mlflow/data/raw/bike_sharing_raw.csv",
+                                                targets=target_col,
+                                                name="bike_sharing_processed")
+        
+        # Log the data to MLflow
+        mlflow.log_input(mlflow_dataset, context="Dataset")
+        mlflow.log_artifact(data_processed_path, artifact_path="processed_data")
+        mlflow.log_dict(data_dict, "bike_sharing_data_info.json")
+
+        mlflow.end_run()
+    
+    @task()
+    def split_dataset():
+        """
+        Generate a dataset split into a training part and a test part
+        """
+        # Processed dataset path
+        data_processed_path = 's3://mlflow/data/processed/bike_sharing_processed.csv'
+        
+        # Read the processed dataset from S3
+        data = wr.s3.read_csv(data_processed_path)
+        
+        # Define X variables and target variable
+        X = data.drop(columns=['log_count'], axis=1)
+        y = data['log_count']
+        
+        # Split the data into training and testing sets
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+        
+        # Save the training and testing datasets to S3
+        X_train_path = 's3://mlflow/data/train/bike_sharing_X_train.csv'
+        X_test_path = 's3://mlflow/data/test/bike_sharing_X_test.csv'
+        y_train_path = 's3://mlflow/data/train/bike_sharing_y_train.csv'
+        y_test_path = 's3://mlflow/data/test/bike_sharing_y_test.csv'
+        
+        wr.s3.to_csv(X_train, X_train_path, index=False)
+        wr.s3.to_csv(X_test, X_test_path, index=False)
+        wr.s3.to_csv(y_train, y_train_path, index=False)
+        wr.s3.to_csv(y_test, y_test_path, index=False)
