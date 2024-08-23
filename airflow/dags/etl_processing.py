@@ -8,6 +8,7 @@ import pandas as pd
 import awswrangler as wr
 import os
 import sys
+import boto3
 
 # Get the absolute path of the src directory
 src_path = os.path.abspath(os.path.join(os.getcwd(), '..', 'src'))
@@ -247,3 +248,74 @@ def etl_processing():
         wr.s3.to_csv(X_test, X_test_path, index=False)
         wr.s3.to_csv(y_train, y_train_path, index=False)
         wr.s3.to_csv(y_test, y_test_path, index=False)
+
+    @task()
+    def normalize_data():
+        # Save the training and testing datasets to S3
+        X_train_path = 's3://mlflow/data/train/bike_sharing_X_train.csv'
+        X_test_path = 's3://mlflow/data/test/bike_sharing_X_test.csv'
+        
+        # Read the training and testing datasets from S3
+        X_train = wr.s3.read_csv(X_train_path)
+        X_test = wr.s3.read_csv(X_test_path)
+
+        # Initialize the scaler
+        scaler = StandardScaler(with_mean=True, with_std=True)
+        
+        # Fit the scaler on the training data
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+        
+        # Conver to DataFrame
+        X_train_scaled = pd.DataFrame(X_train_scaled, columns=X_train.columns)
+        X_test_scaled = pd.DataFrame(X_test_scaled, columns=X_test.columns)
+        
+        # Save the scaled training and testing datasets to S3
+        X_train_scaled_path = 's3://mlflow/data/train/bike_sharing_X_train_scaled.csv'
+        X_test_scaled_path = 's3://mlflow/data/test/bike_sharing_X_test_scaled.csv'
+        
+        wr.s3.to_csv(X_train_scaled, X_train_scaled_path, index=False)
+        wr.s3.to_csv(X_test_scaled, X_test_scaled_path, index=False)
+        
+        # Save information about the scaler
+        client = boto3.client('s3')
+        
+        try:
+            client.head_object(Bucket='mlflow', Key='data_info/bike_sharing_data_info.json')
+            result = client.get_object(Bucket='mlflow', Key='data_info/bike_sharing_data_info.json')
+            text = result["Body"].read().decode()
+            data_dict = json.loads(text)
+        except botocore.exceptions.ClientError as e:
+            if e.response['Error']['Code'] != "404":
+                raise e
+
+        # Upload JSON String to an S3 Object
+        data_dict['standard_scaler_mean'] = scaler.mean_.tolist()
+        data_dict['standard_scaler_std'] = scaler.scale_.tolist()
+        data_string = json.dumps(data_dict, indent=2)
+
+        client.put_object(
+            Bucket='mlflow',
+            Key='data_info/bike_sharing_data_info.json',
+            Body=data_string
+        )
+
+        # Log the data dictionary to MLflow
+        mlflow.set_tracking_uri('http://mlflow:5000')
+        experiment = mlflow.set_experiment("Bike Sharing Demand")
+
+        # Obtain the last experiment run_id to log the new information
+        list_run = mlflow.search_runs([experiment.experiment_id], output_format="list")
+
+        with mlflow.start_run(run_id=list_run[0].info.run_id):
+
+            mlflow.log_param("Train observations", X_train_scaled.shape[0])
+            mlflow.log_param("Test observations", X_test_scaled.shape[0])
+            mlflow.log_param("Standard Scaler feature names", scaler.feature_names_in_)
+            mlflow.log_param("Standard Scaler mean values", scaler.mean_)
+            mlflow.log_param("Standard Scaler scale values", scaler.scale_)
+    
+    get_data() >> feature_engineering() >> split_dataset() >> normalize_data()
+    
+dag = etl_processing()
+        
