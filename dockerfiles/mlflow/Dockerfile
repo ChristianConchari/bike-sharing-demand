@@ -8,9 +8,12 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 
 # Install system dependencies and Python packages
-RUN apt-get update && apt-get install -y wget \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends wget \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
     && pip install --upgrade pip \
-    && pip install mlflow[extras] psycopg2-binary boto3 cryptography pymysql \
+    && pip install --no-cache-dir mlflow[extras] psycopg2-binary boto3 cryptography pymysql \
     && pip install --no-cache-dir -r /app/requirements.txt
 
 # Expose port 5000
