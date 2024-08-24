@@ -274,15 +274,14 @@ def etl_processing():
                         log_system_metrics=True)
         
         # Log the processed dataset to MLflow
-        mlflow_dataset = mlflow.data.from_pandas(df,
-                                                source="s3://mlflow/data/raw/bike_sharing_raw.csv",
-                                                targets=target_col,
-                                                name="bike_sharing_processed")
+        # mlflow_dataset = mlflow.data.from_pandas(df,
+        #                                         targets=target_col,
+        #                                         name="bike_sharing_processed")
         
         # Log the data to MLflow
-        mlflow.log_input(mlflow_dataset, context="Dataset")
-        mlflow.log_artifact(data_processed_path, artifact_path="processed_data")
-        mlflow.log_dict(data_dict, "bike_sharing_data_info.json")
+        # mlflow.log_input(mlflow_dataset, context="Dataset")
+        # mlflow.log_artifact(data_processed_path, artifact_path="processed_data")
+        # mlflow.log_dict(data_dict, "bike_sharing_data_info.json")
 
         mlflow.end_run()
 
