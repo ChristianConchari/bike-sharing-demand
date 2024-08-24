@@ -4,19 +4,6 @@ as two separate CSV files, one for training and one for testing. The split betwe
 """
 from datetime import timedelta
 from airflow.decorators import dag, task
-import pandas as pd
-import awswrangler as wr
-import os
-import sys
-import boto3
-
-# Get the absolute path of the src directory
-src_path = os.path.abspath(os.path.join(os.getcwd(), '..', 'src'))
-# Add the src directory to the Python path
-sys.path.append(src_path)
-
-# Now you can import your functions
-from encoding_functions import cyclic_encode, label_encode, one_hot_encode
 
 MARKDOWN_TEXT = """
 # ETL Pipeline
@@ -46,23 +33,108 @@ def etl_processing():
     """
     ETL process for bike sharing demand data, splitting data into training and testing datasets
     """
-    @task()
+    @task.virtualenv(
+    task_id='get_original_data',
+    requirements=["awswrangler==3.9.1"],
+    system_site_packages=True
+    )
     def get_data():
         """
         Load the original dataset from a CSV file and save it to an S3 bucket
         """
+        import awswrangler as wr
+        import pandas as pd
+        import numpy as np
+        
         # Obtain the original dataset
-        df = pd.read_csv('data/train.csv')
+        df = pd.read_csv('/opt/airflow/data/train.csv')
         
         # Save the original dataset to S3
         data_path = 's3://mlflow/data/raw/bike_sharing_raw.csv'
         wr.s3.to_csv(df, data_path, index=False)
         
-    @task.virtualenv()
+    @task.virtualenv(
+    task_id='feature_engineering',
+    requirements=["awswrangler==3.9.1"],
+    system_site_packages=True
+    )
     def feature_engineering():
         """
         Perform feature engineering on the dataset
         """
+        import json
+        import datetime
+        import boto3
+        import botocore.exceptions
+        import mlflow
+        import os
+        import sys
+
+        import awswrangler as wr
+        import pandas as pd
+        import numpy as np
+
+        from airflow.models import Variable
+        from sklearn.preprocessing import LabelEncoder
+
+        def label_encode(df, columns):
+            """
+            Applies Label Encoding to specified columns of a DataFrame.
+            
+            Parameters:
+            df (pd.DataFrame): The input DataFrame.
+            columns (list): List of column names to apply Label Encoding to.
+            
+            Returns:
+            pd.DataFrame: The DataFrame with the Label Encoded columns.
+            """
+            le = LabelEncoder()
+            
+            for col_label in columns:
+                # Apply Label Encoding
+                df[f'{col_label}_label'] = le.fit_transform(df[col_label])
+            
+            # Drop the original columns
+            df = df.drop(columns, axis=1)
+            
+            return df
+
+        def one_hot_encode(df, one_hot_cols):
+            """
+            Applies One-Hot Encoding to specified columns of a DataFrame.
+            
+            Parameters:
+            df (pd.DataFrame): The input DataFrame.
+            one_hot_cols (list): List of column names to apply One-Hot Encoding to.
+            
+            Returns:
+            pd.DataFrame: The DataFrame with One-Hot Encoded columns.
+            """
+            # Apply One-Hot Encoding
+            df = pd.get_dummies(df, columns=one_hot_cols, drop_first=True, dtype=int)
+            return df
+
+        def cyclic_encode(df, columns, max_value=23):
+            """
+            Applies cyclic encoding to specified columns of a DataFrame.
+            
+            Parameters:
+            df (pd.DataFrame): The input DataFrame.
+            columns (list): List of column names to apply Cyclic Encoding to.
+            max_value (int): The maximum value the cyclic variable can take (e.g., 23 for hours).
+            
+            Returns:
+            pd.DataFrame: The DataFrame with Cyclic Encoded columns added.
+            """
+            for col_name in columns:
+                # Compute the sin and cos components
+                df[f'{col_name}_sin'] = np.sin(2 * np.pi * df[col_name] / max_value)
+                df[f'{col_name}_cos'] = np.cos(2 * np.pi * df[col_name] / max_value)
+                # Drop the original column
+                df = df.drop(col_name, axis=1)
+                
+            return df
+        
         # Set paths for the original and processed data
         data_original_path = 's3://mlflow/data/raw/bike_sharing_raw.csv'
         data_processed_path = 's3://mlflow/data/processed/bike_sharing_processed.csv'
@@ -99,9 +171,7 @@ def etl_processing():
         
         # Find pairs of columns with high correlation
         high_corr_pairs = [
-            # Pair of columns with correlation value
             (col1, col2) for col1 in corr.columns for col2 in corr.columns 
-            # Ensure the pair is unique and the correlation value is greater than 0.85
             if col1 != col2 and abs(corr.loc[col1, col2]) > 0.85 
         ]
         
@@ -109,7 +179,6 @@ def etl_processing():
         to_drop = set()
 
         for col1, col2 in high_corr_pairs:
-            # Drop the column with the least correlation with the target
             if abs(corr.loc[col1, 'log_count']) > abs(corr.loc[col2, 'log_count']):
                 to_drop.add(col2)
             else:
@@ -121,12 +190,17 @@ def etl_processing():
         # Tracking categorical columns before encoding
         original_categorical_columns = ['holiday', 'workingday', 'year', 'weather', 'month', 'weekday', 'hour']
 
+        # Define lists for tracking encoded columns
+        label_encoded_columns = ['holiday', 'workingday', 'year']
+        one_hot_encoded_columns = ['weather', 'month', 'weekday']
+        cyclic_encoded_columns = ['hour']
+
         # Encode using label encoding
-        df = label_encode(df, ['holiday', 'workingday', 'year'])
+        df = label_encode(df, label_encoded_columns)
         # Encode using one-hot encoding
-        df = one_hot_encode(df, ['weather', 'month', 'weekday'])
+        df = one_hot_encode(df, one_hot_encoded_columns)
         # Encode using cyclic encoding
-        df = cyclic_encode(df, ['hour'])
+        df = cyclic_encode(df, cyclic_encoded_columns)
         
         # Save the processed dataset to S3
         wr.s3.to_csv(df, data_processed_path, index=False)
@@ -153,14 +227,6 @@ def etl_processing():
         # Track original categorical columns
         data_dict['original_categorical_columns'] = original_categorical_columns
 
-        # Track encoded columns
-        data_dict['label_encoded_columns'] = label_encoded_columns
-        data_dict['one_hot_encoded_columns'] = {col: df.filter(like=f'{col}_').columns.to_list() for col in one_hot_encoded_columns}
-        data_dict['cyclic_encoded_columns'] = cyclic_encoded_columns
-
-        # Track data types
-        data_dict['columns_dtypes'] = {k: str(v) for k, v in dataset_log.dtypes.to_dict().items()}
-        
         # Tracking details of label encoding, one-hot encoding, and cyclic encoding
         label_encoded_dict = {}
         one_hot_encoded_dict = {}
@@ -168,7 +234,7 @@ def etl_processing():
 
         # Tracking unique values for label encoded columns
         for col in label_encoded_columns:
-            label_encoded_dict[col] = df[col].unique().tolist()
+            label_encoded_dict[col] = df[f'{col}_label'].unique().tolist()
 
         # Tracking one-hot encoded columns and their resulting dummy variables
         for col in one_hot_encoded_columns:
@@ -177,7 +243,7 @@ def etl_processing():
         # Tracking original values and transformed values for cyclically encoded columns
         for col in cyclic_encoded_columns:
             cyclic_encoded_dict[col] = {
-                'original_values': df[col].unique().tolist(),
+                'original_values': df[[f'{col}_sin', f'{col}_cos']].drop_duplicates().index.tolist(),
                 'transformed_columns': [f'{col}_sin', f'{col}_cos']
             }
 
@@ -187,7 +253,7 @@ def etl_processing():
         data_dict['cyclic_encoded_columns'] = cyclic_encoded_dict
 
         # Track the date and time the data was processed
-        data_dict['date'] = datetime.datetime.today().strftime('%Y/%m/%d-%H:%M:%S"')
+        data_dict['date'] = datetime.datetime.today().strftime('%Y/%m/%d-%H:%M:%S')
         data_string = json.dumps(data_dict, indent=2)
 
         # Save the data dictionary to S3
@@ -202,7 +268,7 @@ def etl_processing():
         experiment = mlflow.set_experiment("Bike Sharing Demand")
 
         # Start a new MLflow run
-        mlflow.start_run(run_name='Feature_Engineering_' + datetime.datetime.today().strftime('%Y/%m/%d-%H:%M:%S"'),
+        mlflow.start_run(run_name='Feature_Engineering_' + datetime.datetime.today().strftime('%Y/%m/%d-%H:%M:%S'),
                         experiment_id=experiment.experiment_id,
                         tags={"experiment": "feature_engineering", "dataset": "Bike Sharing"},
                         log_system_metrics=True)
@@ -219,13 +285,21 @@ def etl_processing():
         mlflow.log_dict(data_dict, "bike_sharing_data_info.json")
 
         mlflow.end_run()
+
     
-    @task()
+    @task.virtualenv(
+        task_id='split_dataset',
+        requirements=[ "awswrangler==3.9.1" ],
+        system_site_packages=True
+    )
     def split_dataset():
         """
         Generate a dataset split into a training part and a test part
         """
+        import awswrangler as wr
         from sklearn.model_selection import train_test_split
+        from airflow.models import Variable
+        
         # Processed dataset path
         data_processed_path = 's3://mlflow/data/processed/bike_sharing_processed.csv'
         
@@ -250,9 +324,22 @@ def etl_processing():
         wr.s3.to_csv(y_train, y_train_path, index=False)
         wr.s3.to_csv(y_test, y_test_path, index=False)
 
-    @task()
+    @task.virtualenv(
+        task_id='normalize_data',
+        requirements=[ "awswrangler==3.9.1" ],
+        system_site_packages=True
+    )
     def normalize_data():
+        import json
+        import mlflow
+        import boto3
+        import botocore.exceptions
+        
+        import pandas as pd
+        import awswrangler as wr
+        
         from sklearn.preprocessing import StandardScaler
+        
         # Save the training and testing datasets to S3
         X_train_path = 's3://mlflow/data/train/bike_sharing_X_train.csv'
         X_test_path = 's3://mlflow/data/test/bike_sharing_X_test.csv'
