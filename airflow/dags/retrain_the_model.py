@@ -1,6 +1,6 @@
 from datetime import timedelta
-
 from airflow.decorators import dag, task
+import logging
 
 MARKDOWN_TEXT = """
 # Retrain the model
@@ -17,6 +17,10 @@ default_args = {
     'retry_delay': timedelta(minutes=5),
     'dagrun_timeout': timedelta(minutes=15)
 }
+
+# Initialize logging for DAG execution
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 @dag(
     dag_id='retrain_the_model',
@@ -339,7 +343,12 @@ def retrain_the_model():
             logger.info("Challenger model is not better than the champion model")
             demote_challenger(name)
             
+    # Define the DAG workflow
+    logger.info("Setting up task dependencies for the DAG workflow")
     train_challenger_model() >> evaluate_champion_challenge()
     
+    logger.info("Task dependencies set up successfully")
+    
+# Instantiate the DAG
 retrain_the_model_dag = retrain_the_model()
             
