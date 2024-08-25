@@ -43,6 +43,7 @@ def retrain_the_model():
         import logging
         import mlflow
         import awswrangler as wr
+        import numpy as np
         from sklearn.base import clone
         from sklearn.metrics import mean_squared_error, r2_score
         from mlflow.models import infer_signature
