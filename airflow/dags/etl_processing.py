@@ -41,24 +41,50 @@ def etl_processing():
     )
     def get_data() -> None:
         """
-        Load the original dataset from UCI ML Repository
+        Load the original dataset from UCI ML Repository and save it to S3.
         """
+        # Import necessary libraries
+        import logging
         import awswrangler as wr
         import pandas as pd
         from ucimlrepo import fetch_ucirepo
-        from airflow.models import Variable
-        
-        # Fetch the dataset from UCI ML Repository
-        bike_sharing_demand = fetch_ucirepo(id=275)
-        df_features = bike_sharing_demand.data.features
-        df_targets = bike_sharing_demand.data.targets
 
-        # Join the features and target DataFrames
-        df = pd.concat([df_features, df_targets], axis=1)
-        
-        # Save the original dataset to S3
+        # Initialize logging
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger(__name__)
+
+        # Define the S3 path where the dataset will be saved
         data_path = 's3://data/raw/bike_sharing_demand.csv'
-        wr.s3.to_csv(df, data_path, index=False)
+
+        logger.info("Starting to fetch the dataset from UCI ML Repository")
+
+        try:
+            # Fetch the dataset from UCI ML Repository
+            bike_sharing_demand = fetch_ucirepo(id=275)
+            df_features = bike_sharing_demand.data.features
+            df_targets = bike_sharing_demand.data.targets
+            logger.info("Dataset fetched successfully from UCI ML Repository")
+        except Exception as e:
+            logger.error(f"Failed to fetch dataset from UCI ML Repository: {e}")
+            raise
+
+        try:
+            # Join the features and target DataFrames
+            df = pd.concat([df_features, df_targets], axis=1)
+            logger.info("Features and targets DataFrames concatenated successfully")
+        except Exception as e:
+            logger.error(f"Failed to concatenate features and targets DataFrames: {e}")
+            raise
+
+        logger.info(f"Starting to save the dataset to S3 at {data_path}")
+
+        try:
+            # Save the original dataset to S3
+            wr.s3.to_csv(df, data_path, index=False)
+            logger.info(f"Dataset saved successfully to {data_path}")
+        except Exception as e:
+            logger.error(f"Failed to save dataset to S3 at {data_path}: {e}")
+            raise
         
     @task.virtualenv(
         task_id='feature_engineering',
