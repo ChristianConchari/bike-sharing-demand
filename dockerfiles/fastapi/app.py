@@ -2,6 +2,7 @@ import json
 import pickle
 import boto3
 import mlflow
+import joblib
 
 import numpy as np
 import pandas as pd
@@ -26,29 +27,39 @@ def load_model(model_name: str, alias: str):
         model_ml = mlflow.sklearn.load_model(model_data_mlflow.source)
         # Get the version of the model
         version_model_ml = int(model_data_mlflow.version)
+        
+        print(f"Model {model_name} loaded from MLflow registry with version {version_model_ml}")
+        
     except:
         # If there is no registry in MLflow, open the default model
-        file_ml = open('/app/files/model.pkl', 'rb')
+        file_ml = open('/app/files/rf_model.pkl', 'rb')
         model_ml = pickle.load(file_ml)
         file_ml.close()
         version_model_ml = 0
+        
+        print(f"Model {model_name} loaded from local file")
         
     try:
         # Load information of the ETL pipeline from S3
         s3 = boto3.client('s3')
 
-        s3.head_object(Bucket='data', Key='data_info/data.json')
-        result_s3 = s3.get_object(Bucket='data', Key='data_info/data.json')
+        s3.head_object(Bucket='data', Key='data_info/bike_sharing_demand_data_info.json')
+        result_s3 = s3.get_object(Bucket='data', Key='data_info/bike_sharing_demand_data_info.json')
         text_s3 = result_s3["Body"].read().decode()
         data_dictionary = json.loads(text_s3)
 
         data_dictionary["standard_scaler_mean"] = np.array(data_dictionary["standard_scaler_mean"])
         data_dictionary["standard_scaler_std"] = np.array(data_dictionary["standard_scaler_std"])
+        
+        print("Data dictionary loaded from S3")
+        
     except:
         # If data dictionary is not found in S3, load it from local file
-        file_s3 = open('/app/files/data.json', 'r')
+        file_s3 = open('/app/files/bike_sharing_demand_data_info.json', 'r')
         data_dictionary = json.load(file_s3)
         file_s3.close()
+        
+        print("Data dictionary loaded from local file")
 
     return model_ml, version_model_ml, data_dictionary
 
@@ -74,66 +85,57 @@ class ModelInput(BaseModel):
     :param ca: Number of major vessels colored by flourosopy (0 to 3).
     :param thal: Thalassemia disease. 3: normal; 6: fixed defect; 7: reversable defect.
     """
-
-    datetime: str = Field(
-        description="The hourly date and the tmestamp",
-        format="date-time",
-    )
     season: Literal[1, 2, 3, 4] = Field(
         description="The season of the year. 1: winter; 2: spring; 3: summer; 4: fall"
+    )
+    yr: int = Field(
+        description="The year (0: 2011, 1: 2012)",
+        ge=0,
+        le=1,
+    )
+    hr: int = Field(
+        description="The hour of the day (0 to 23)",
+        ge=0,
+        le=23,
     )
     holiday: Literal[0, 1] = Field(
         description="Whether the day is a holiday or not. 1: holiday; 0: no holiday"
     )
+    weekday: int = Field(
+        description="The day of the week",
+        ge=0,
+        le=6,
+    )
     workingday: Literal[0, 1] = Field(
         description="Whether the day is a working day or not. 1: working day; 0: no working day"
     )
-    weather: Literal[1, 2, 3, 4] = Field(
-        description=(
-            "Weather situation:\n"
-            "1: Clear, Few clouds, Partly cloudy, Partly cloudy\n"
-            "2: Mist + Cloudy, Mist + Broken clouds, Mist + Few clouds, Mist\n"
-            "3: Light Snow, Light Rain + Thunderstorm + Scattered clouds, Light Rain + Scattered clouds\n"
-            "4: Heavy Rain + Ice Pallets + Thunderstorm + Mist, Snow + Fog"
-        )
+    weathersit: Literal[1, 2, 3, 4] = Field(
+        description="Clear, Few clouds, Partly cloudy, Partly cloudy"
     )
     temp: float = Field(
-        description="Temperature in Celsius",
-        ge=0.0,
-        le=50.0,
+        description="Normalized temperature in Celsius. The values are derived via (t-t_min)/(t_max-t_min), t_min=-8, t_max=+39 (only in hourly scale)",
     )
-    humidity: float = Field(
-        description="Relative humidity",
-        ge=0.0,
-        le=100.0,
+    hum: float = Field(
+        description="Normalized humidity. The values are divided to 100 (max)",
     )
     windspeed: float = Field(
-        description="Wind speed",
-        ge=0.0,
-    )
-    casual: int = Field(
-        description="Number of casual users",
-        ge=0,
-    )
-    registered: int = Field(
-        description="Number of registered users",
-        ge=0,
+        description="Normalized wind speed. The values are divided to 67 (max)",
     )
 
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
-                    "datetime": "2011-01-01 00:00:00",
                     "season": 1,
+                    "yr": 0,
+                    "hr": 0,
                     "holiday": 0,
+                    "weekday": 6,
                     "workingday": 0,
-                    "weather": 1,
-                    "temp": 9.84,
-                    "humidity": 81.0,
+                    "weathersit": 1,
+                    "temp": 0.24,
+                    "hum": 0.81,
                     "windspeed": 0.0,
-                    "casual": 3,
-                    "registered": 13
                 }
             ]
         }
@@ -154,9 +156,45 @@ class ModelOutput(BaseModel):
         }
     }
 
-model, version_model, data_dictionary = load_model("bike_sharing_model_prod ", "best-model")
+model, version_model, data_dictionary = load_model("bike_sharing_model_prod", "best-model")
 
 app = FastAPI()
+
+def one_hot_encode(df: pd.DataFrame, one_hot_cols: list) -> pd.DataFrame:
+    """
+    Applies One-Hot Encoding to specified columns of a DataFrame.
+    
+    Parameters:
+    - df (pd.DataFrame): The input DataFrame.
+    - one_hot_cols (list): List of column names to apply One-Hot Encoding to.
+    
+    Returns:
+    - pd.DataFrame: The DataFrame with One-Hot Encoded columns.
+    """
+    # Apply One-Hot Encoding
+    df = pd.get_dummies(df, columns=one_hot_cols, drop_first=True, dtype=int)
+    return df
+
+def cyclic_encode(df: pd.DataFrame, columns: list, max_value: int = 23) -> pd.DataFrame:
+    """
+    Applies cyclic encoding to specified columns of a DataFrame.
+    
+    Parameters:
+    - df (pd.DataFrame): The input DataFrame.
+    - columns (list): List of column names to apply Cyclic Encoding to.
+    - max_value (int): The maximum value the cyclic variable can take (e.g., 23 for hours).
+    
+    Returns:
+    - pd.DataFrame: The DataFrame with Cyclic Encoded columns added.
+    """
+    for col_name in columns:
+        # Compute the sin and cos components
+        df[f'{col_name}_sin'] = np.sin(2 * np.pi * df[col_name] / max_value)
+        df[f'{col_name}_cos'] = np.cos(2 * np.pi * df[col_name] / max_value)
+        # Drop the original column
+        df = df.drop(col_name, axis=1)
+        
+    return df
 
 
 @app.get("/")
@@ -179,4 +217,21 @@ def predict(
     features_df = pd.DataFrame(np.array(features_list).reshape(1, -1), columns=features_key)
     
     # Process categorical features
+    for categorical_column in data_dictionary["one_hot_encoded_columns"] :
+        features_df[categorical_column] = features_df[categorical_column].astype(int)
+        categories = data_dictionary["categories_values_per_categorical"][categorical_column]
+        features_df[categorical_column] = pd.Categorical(features_df[categorical_column], categories=categories)
     
+    features_df = one_hot_encode(features_df, data_dictionary["one_hot_encoded_columns"])
+    features_df = cyclic_encode(features_df, data_dictionary["cyclic_encoded_columns"])
+    
+    # Standardize the features
+    features_df = (features_df - data_dictionary["standard_scaler_mean"]) / data_dictionary["standard_scaler_std"]
+    
+    # Make the prediction
+    prediction = model.predict(features_df)
+    
+    # Compute the reverse transformation
+    prediction = np.exp(prediction).astype(int)
+    
+    return ModelOutput(int_output=prediction)
