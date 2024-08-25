@@ -4,6 +4,7 @@ as two separate CSV files, one for training and one for testing. The split betwe
 """
 from datetime import timedelta
 from airflow.decorators import dag, task
+import logging
 
 MARKDOWN_TEXT = """
 # ETL Pipeline
@@ -20,6 +21,10 @@ default_args = {
     'retry_delay': timedelta(minutes=5),
     'dagrun_timeout': timedelta(minutes=15)
 }
+
+# Initialize logging for DAG execution
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 @dag(
     dag_id='process_etl_bike_sharing_data',
