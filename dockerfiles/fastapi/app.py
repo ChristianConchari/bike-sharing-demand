@@ -8,14 +8,20 @@ import numpy as np
 import pandas as pd
 
 from typing import Literal
-from fastapi import FastAPI, Body, BackgroundTasks
+from fastapi import FastAPI, Body, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated
 
+# Define global variables
+model_name = "bike_sharing_model_prod"
+version_model = 0
+data_dictionary = {}
 
 def load_model(model_name: str, alias: str):
+    global model, version_model, data_dictionary
+    
     try:
         # Load the trained model from MLflow
         mlflow.set_tracking_uri('http://mlflow:5000')
@@ -141,16 +147,36 @@ class ModelInput(BaseModel):
         }
     }
 
+class ReloadModelInput(BaseModel):
+    reload_model_name: str = Field(..., description="The name of the model to load from MLflow.")
+    alias: str = Field(..., description="The alias of the model version to load.")
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "reload_model_name": "bike_sharing_model_prod",
+                "alias": "best-model"
+            }
+        }
+
 class ModelOutput(BaseModel):
     int_output: int = Field(
         description="The predicted count of total rental bikes",
+    )
+    model_name: str = Field(
+        description="The name of the model used for prediction",
+    )
+    model_version: int = Field(
+        description="The version of the model used for prediction",
     )
 
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
-                    "int_output": 16
+                    "int_output": 16,
+                    "model_name": "bike_sharing_model_prod",
+                    "model_version": 1
                 }
             ]
         }
@@ -201,6 +227,26 @@ def cyclic_encode(df: pd.DataFrame, columns: list, max_value: int = 23) -> pd.Da
 async def read_root():
     return JSONResponse(content=jsonable_encoder({"message": "Welcome to the Heart Disease Detector API"}))
 
+@app.post("/reload_model")
+def reload_model(
+    reload_input: ReloadModelInput = Body(...),
+):
+    """
+    Endpoint to reload the model with the given name and alias.
+    
+    :param model_name: The name of the model to load from MLflow.
+    :param alias: The alias of the model version to load.
+    """
+    global model, model_name, version_model, data_dictionary
+
+    try:
+        model_name = reload_input.reload_model_name
+        model, version_model, data_dictionary = load_model(model_name, reload_input.alias)
+        print(f"Model {model_name} reloaded with version {version_model} from MLflow")
+        return JSONResponse(content={"message": f"Model {model_name} reloaded with version {version_model}"})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reload model: {str(e)}")
+
 @app.post("/predict", response_model=ModelOutput)
 def predict(
     features: Annotated[
@@ -234,4 +280,4 @@ def predict(
     # Compute the reverse transformation
     prediction = np.exp(prediction).astype(int)
     
-    return ModelOutput(int_output=prediction)
+    return ModelOutput(int_output=prediction, model_name=model_name, model_version=version_model)
