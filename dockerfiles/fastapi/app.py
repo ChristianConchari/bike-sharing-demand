@@ -6,10 +6,14 @@ import joblib
 
 import numpy as np
 import pandas as pd
+import os
 
 from typing import Literal
 from fastapi import FastAPI, Body, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.requests import Request
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated
@@ -186,6 +190,12 @@ model, version_model, data_dictionary = load_model("bike_sharing_model_prod", "b
 
 app = FastAPI()
 
+if not os.path.exists("static"):
+    os.makedirs("static")
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
+
 def one_hot_encode(df: pd.DataFrame, one_hot_cols: list) -> pd.DataFrame:
     """
     Applies One-Hot Encoding to specified columns of a DataFrame.
@@ -224,8 +234,8 @@ def cyclic_encode(df: pd.DataFrame, columns: list, max_value: int = 23) -> pd.Da
 
 
 @app.get("/")
-async def read_root():
-    return JSONResponse(content=jsonable_encoder({"message": "Welcome to the Heart Disease Detector API"}))
+async def read_root(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/reload_model")
 def reload_model(

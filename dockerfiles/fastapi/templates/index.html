@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bike Sharing Prediction</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+        }
+
+        input[type="number"],
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+        }
+
+        button {
+            padding: 10px 20px;
+            margin: 10px 0;
+        }
+
+        .form-container {
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Bike Sharing Demand Prediction</h1>
+
+    <!-- Form for Predictions -->
+    <div class="form-container">
+        <h2>Make a Prediction</h2>
+        <form id="predictForm">
+            <input type="number" id="season" placeholder="Season (1 to 4)" required><br>
+            <input type="number" id="yr" placeholder="Year (0: 2011, 1: 2012)" required><br>
+            <input type="number" id="hr" placeholder="Hour (0 to 23)" required><br>
+            <input type="number" id="holiday" placeholder="Holiday (0: No, 1: Yes)" required><br>
+            <input type="number" id="weekday" placeholder="Weekday (0 to 6)" required><br>
+            <input type="number" id="workingday" placeholder="Working Day (0: No, 1: Yes)" required><br>
+            <input type="number" id="weathersit" placeholder="Weather Situation (1 to 4)" required><br>
+            <input type="number" step="any" id="temp" placeholder="Temperature (Normalized)" required><br>
+            <input type="number" step="any" id="hum" placeholder="Humidity (Normalized)" required><br>
+            <input type="number" step="any" id="windspeed" placeholder="Windspeed (Normalized)" required><br>
+            <button type="submit">Predict</button>
+        </form>
+        <p id="predictionResult"></p>
+    </div>
+
+    <!-- Form for Reloading Model -->
+    <div class="form-container">
+        <h2>Reload Model</h2>
+        <form id="reloadForm">
+            <input type="text" id="model_name" placeholder="Model Name" required><br>
+            <input type="text" id="alias" placeholder="Alias" required><br>
+            <button type="submit">Reload Model</button>
+        </form>
+        <p id="reloadResult"></p>
+    </div>
+
+    <script>
+        document.getElementById('predictForm').addEventListener('submit', async function (event) {
+            event.preventDefault();
+            const data = {
+                season: parseInt(document.getElementById('season').value),
+                yr: parseInt(document.getElementById('yr').value),
+                hr: parseInt(document.getElementById('hr').value),
+                holiday: parseInt(document.getElementById('holiday').value),
+                weekday: parseInt(document.getElementById('weekday').value),
+                workingday: parseInt(document.getElementById('workingday').value),
+                weathersit: parseInt(document.getElementById('weathersit').value),
+                temp: parseFloat(document.getElementById('temp').value),
+                hum: parseFloat(document.getElementById('hum').value),
+                windspeed: parseFloat(document.getElementById('windspeed').value)
+            };
+
+            const response = await fetch('/predict', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ features: data })
+            });
+
+            const result = await response.json();
+            document.getElementById('predictionResult').textContent = `Prediction: ${result.int_output}, Model: ${result.model_name}, Version: ${result.model_version}`;
+        });
+
+        document.getElementById('reloadForm').addEventListener('submit', async function (event) {
+            event.preventDefault();
+            const data = {
+                reload_model_name: document.getElementById('model_name').value,
+                alias: document.getElementById('alias').value
+            };
+
+            const response = await fetch('/reload_model', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            });
+
+            const result = await response.json();
+            document.getElementById('reloadResult').textContent = result.message;
+        });
+    </script>
+</body>
+
+</html>
