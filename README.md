@@ -12,6 +12,44 @@ Nuestra implementación incluye:
 
 - En **Apache Airflow**, un DAG que orquesta un flujo de reentrenamiento del modelo. Se compara el nuevo modelo `challenger` con el `champion` y si el primero es mejor, se actualiza a `champion`. El proceso se registra en **MLFlow**.
 
+## Instrucciones para levantar el proyecto
+1. En un primer punto es necesario asegurarse de tener instalado [Docker](https://docs.docker.com/get-docker/) y [Docker Compose](https://docs.docker.com/compose/install/). 
+
+2. Clonar el repositorio y moverse al directorio raíz del proyecto.
+
+3. Crea las carpetas `airflow/config`, `airflow/dags`, `airflow/logs`, `airflow/plugins`, `airflow/logs`.
+```bash
+mkdir -p airflow/config airflow/dags airflow/logs airflow/plugins airflow/logs
+```
+
+4. Crear un archivo `.env` en la raíz del proyecto, donde se definirán las variables de entorno necesarias para el proyecto. En el archivo `.env.template` se encuentran variables de ejemplo que se pueden utilizar.
+
+5. En caso de estar utilizando Linux o MacOS, en el archivo `.env`, se debe reemplazar la variable `AIRFLOW_UID` por el correspondiente al usuario que esté utilizando el sistema operativo. Para obtener el UID del usuario, se puede ejecutar el comando `id -u <username>`. 
+
+6. En la carpeta raíz del proyecto, ejecutar el siguiente comando para levantar el multi-contenedor:
+```bash
+docker compose --profile all up
+```
+
+7. Una vez que todos los contenedores estén levantados, se puede acceder a los diferentes servicios:
+- **Apache Airflow**: [http://localhost:8080](http://localhost:8080)
+- **MLFlow**: [http://localhost:5000](http://localhost:5000)
+- **Minio**: [http://localhost:9000](http://localhost:9001)
+- **FastAPI**: [http://localhost:8800](http://localhost:8800)
+- **FastAPI Docs**: [http://localhost:8800/docs](http://localhost:8800/docs)
+
+## Detener los contenedores
+
+Para detener los contenedores, ejecutar el siguiente comando:
+```bash
+docker compose --profile all down
+```
+
+Si se desea eliminar los volúmenes creados por los contenedores, se puede ejecutar el siguiente comando:
+```bash
+docker compose --profile all down --volumes
+```
+
 ## Instrucciones para probar el funcionamiento del proyecto
 
 1. Una vez levantado el multi-contenedor, ejecutar en Airflow el DAG `process_etl_bike_sharing_data`, de esta manera se crearán los datos en el bucket `s3://data`.
@@ -23,3 +61,9 @@ hiperparámetros y entrenar el mejor modelo.
 
 4. Ejecutar el DAG `retrain_the_model` en Apache Airflow para reentrenar el modelo y comparar si un nuevo modelo entrenado es mejor que el actual. Si es así, se actualizará el modelo `champion`.
 
+## Integrantes
+- **Christian Ricardo Conchari Cabrera** - chrisconchari@gmail.com
+- **William Andrés Prada Mancilla** - wpradamancilla@gmail.com
+- **Carlos Villalobos** - carlosvillalobosh3@gmail.com
+- **Carlos Mendez** - carlos.mendezt@gmail.com
+- **German Poletto** - germanpp13@gmail.com
