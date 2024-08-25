@@ -35,22 +35,28 @@ def etl_processing():
     """
     @task.virtualenv(
     task_id='get_original_data',
-    requirements=["awswrangler==3.9.1"],
+    requirements=["ucimlrepo==0.0.7", "awswrangler==3.9.1"],
     system_site_packages=True
     )
-    def get_data():
+    def get_data() -> None:
         """
-        Load the original dataset from a CSV file and save it to an S3 bucket
+        Load the original dataset from UCI ML Repository
         """
         import awswrangler as wr
         import pandas as pd
-        import numpy as np
+        from ucimlrepo import fetch_ucirepo
+        from airflow.models import Variable
         
-        # Obtain the original dataset
-        df = pd.read_csv('/opt/airflow/data/train.csv')
+        # Fetch the dataset from UCI ML Repository
+        bike_sharing_demand = fetch_ucirepo(id=275)
+        df_features = bike_sharing_demand.data.features
+        df_targets = bike_sharing_demand.data.targets
+
+        # Join the features and target DataFrames
+        df = pd.concat([df_features, df_targets], axis=1)
         
         # Save the original dataset to S3
-        data_path = 's3://mlflow/data/raw/bike_sharing_raw.csv'
+        data_path = 's3://data/raw/bike_sharing_demand.csv'
         wr.s3.to_csv(df, data_path, index=False)
         
     @task.virtualenv(
@@ -58,7 +64,7 @@ def etl_processing():
     requirements=["awswrangler==3.9.1"],
     system_site_packages=True
     )
-    def feature_engineering():
+    def feature_engineering() -> None:
         """
         Perform feature engineering on the dataset
         """
@@ -77,54 +83,32 @@ def etl_processing():
         from airflow.models import Variable
         from sklearn.preprocessing import LabelEncoder
 
-        def label_encode(df, columns):
-            """
-            Applies Label Encoding to specified columns of a DataFrame.
-            
-            Parameters:
-            df (pd.DataFrame): The input DataFrame.
-            columns (list): List of column names to apply Label Encoding to.
-            
-            Returns:
-            pd.DataFrame: The DataFrame with the Label Encoded columns.
-            """
-            le = LabelEncoder()
-            
-            for col_label in columns:
-                # Apply Label Encoding
-                df[f'{col_label}_label'] = le.fit_transform(df[col_label])
-            
-            # Drop the original columns
-            df = df.drop(columns, axis=1)
-            
-            return df
-
-        def one_hot_encode(df, one_hot_cols):
+        def one_hot_encode(df: pd.DataFrame, one_hot_cols: list) -> pd.DataFrame:
             """
             Applies One-Hot Encoding to specified columns of a DataFrame.
             
             Parameters:
-            df (pd.DataFrame): The input DataFrame.
-            one_hot_cols (list): List of column names to apply One-Hot Encoding to.
+            - df (pd.DataFrame): The input DataFrame.
+            - one_hot_cols (list): List of column names to apply One-Hot Encoding to.
             
             Returns:
-            pd.DataFrame: The DataFrame with One-Hot Encoded columns.
+            - pd.DataFrame: The DataFrame with One-Hot Encoded columns.
             """
             # Apply One-Hot Encoding
             df = pd.get_dummies(df, columns=one_hot_cols, drop_first=True, dtype=int)
             return df
 
-        def cyclic_encode(df, columns, max_value=23):
+        def cyclic_encode(df: pd.DataFrame, columns: list, max_value: int) -> pd.DataFrame:
             """
             Applies cyclic encoding to specified columns of a DataFrame.
             
             Parameters:
-            df (pd.DataFrame): The input DataFrame.
-            columns (list): List of column names to apply Cyclic Encoding to.
-            max_value (int): The maximum value the cyclic variable can take (e.g., 23 for hours).
+            - df (pd.DataFrame): The input DataFrame.
+            - columns (list): List of column names to apply Cyclic Encoding to.
+            - max_value (int): The maximum value the cyclic variable can take (e.g., 23 for hours).
             
             Returns:
-            pd.DataFrame: The DataFrame with Cyclic Encoded columns added.
+            - pd.DataFrame: The DataFrame with Cyclic Encoded columns added.
             """
             for col_name in columns:
                 # Compute the sin and cos components
@@ -136,8 +120,8 @@ def etl_processing():
             return df
         
         # Set paths for the original and processed data
-        data_original_path = 's3://mlflow/data/raw/bike_sharing_raw.csv'
-        data_processed_path = 's3://mlflow/data/processed/bike_sharing_processed.csv'
+        data_original_path = 's3://data/raw/bike_sharing_demand.csv'
+        data_processed_path = 's3://data/processed/bike_sharing_demand.csv'
         
         # Read the original dataset from S3
         df = wr.s3.read_csv(data_original_path)
@@ -146,25 +130,8 @@ def etl_processing():
         df = df.drop_duplicates()
         df = df.dropna()
         
-        # Ensure the datetime column is in the correct format
-        df['datetime'] = pd.to_datetime(df['datetime'])
-        
-        # Extract year, month, weekday, weekend, and hour
-        df['year'] = df['datetime'].dt.year
-        df['month'] = df['datetime'].dt.month
-        df['weekday'] = df['datetime'].dt.weekday
-        df['hour'] = df['datetime'].dt.hour
-        
-        # Drop the datetime column
-        df = df.drop(columns=['datetime'], axis=1)
-        
         # Normalize count column by taking the log
-        df['log_count'] = np.log(df['count'] + 1)
-        df['log_casual'] = np.log(df['casual'] + 1)
-        df['log_registered'] = np.log(df['registered'] + 1)
-        
-        # Drop the original count, casual, and registered columns
-        df = df.drop(['count', 'casual', 'registered'], axis=1)
+        df['log_cnt'] = np.log(df['cnt'])
         
         # Calculate the correlation matrix
         corr = df.corr()
@@ -175,82 +142,56 @@ def etl_processing():
             if col1 != col2 and abs(corr.loc[col1, col2]) > 0.85 
         ]
         
-        # Identify columns to drop
-        to_drop = set()
-
-        for col1, col2 in high_corr_pairs:
-            if abs(corr.loc[col1, 'log_count']) > abs(corr.loc[col2, 'log_count']):
-                to_drop.add(col2)
-            else:
-                to_drop.add(col1)
-
-        # Drop the identified columns
-        df = df.drop(columns=to_drop)
-        
-        # Tracking categorical columns before encoding
-        original_categorical_columns = ['holiday', 'workingday', 'year', 'weather', 'month', 'weekday', 'hour']
+        # Mantain only selected features
+        selected_columns = Variable.get("features")
+        df = df[selected_columns + ['log_cnt']]
 
         # Define lists for tracking encoded columns
-        label_encoded_columns = ['holiday', 'workingday', 'year']
-        one_hot_encoded_columns = ['weather', 'month', 'weekday']
-        cyclic_encoded_columns = ['hour']
+        one_hot_encoded_columns = ['weathersit', 'season', 'weekday']
+        cyclic_encoded_columns = ['hr']
+        
+        df_encoded = df.copy()
 
-        # Encode using label encoding
-        df = label_encode(df, label_encoded_columns)
         # Encode using one-hot encoding
-        df = one_hot_encode(df, one_hot_encoded_columns)
+        df_encoded = one_hot_encode(df_encoded, one_hot_encoded_columns)
         # Encode using cyclic encoding
-        df = cyclic_encode(df, cyclic_encoded_columns)
+        df_encoded = cyclic_encode(df_encoded, cyclic_encoded_columns)
         
         # Save the processed dataset to S3
-        wr.s3.to_csv(df, data_processed_path, index=False)
+        wr.s3.to_csv(df_encoded, data_processed_path, index=False)
 
+        # Save information about the dataset
         client = boto3.client('s3')
         data_dict = {}
         
         try:
-            client.head_object(Bucket='mlflow', Key='data_info/bike_sharing_data_info.json')
-            result = client.get_object(Bucket='mlflow', Key='data_info/bike_sharing_data_info.json')
+            client.head_object(Bucket='data', Key='data_info/bike_sharing_demand_data_info.json')
+            result = client.get_object(Bucket='data', Key='data_info/bike_sharing_demand_data_info.json')
             text = result["Body"].read().decode()
             data_dict = json.loads(text)
         except botocore.exceptions.ClientError as e:
             if e.response['Error']['Code'] != "404":
                 raise e
 
-        target_col = 'log_count'
+        # Get the target column and drop it from the dataset
+        target_col = Variable.get("target")
         dataset_log = df.drop(columns=target_col)
-
+        dataset_encoded_log = df_encoded.drop(columns=target_col)
+        
         # Save information about the dataset
         data_dict['columns'] = dataset_log.columns.to_list()
+        data_dict['columns_encoded'] = dataset_encoded_log.columns.to_list()
         data_dict['target_col'] = target_col
+        data_dict['categorical_columns'] = one_hot_encoded_columns + cyclic_encoded_columns
+        data_dict['columns_dtypes'] = {k: str(v) for k, v in dataset_encoded_log.dtypes.to_dict().items()}
+
+        category_encoded_dict = {}
         
-        # Track original categorical columns
-        data_dict['original_categorical_columns'] = original_categorical_columns
+        # Save the categories for each categorical column
+        for category in one_hot_encoded_columns + cyclic_encoded_columns:
+            category_encoded_dict[category] = np.sort(dataset_log[category].unique()).tolist()
 
-        # Tracking details of label encoding, one-hot encoding, and cyclic encoding
-        label_encoded_dict = {}
-        one_hot_encoded_dict = {}
-        cyclic_encoded_dict = {}
-
-        # Tracking unique values for label encoded columns
-        for col in label_encoded_columns:
-            label_encoded_dict[col] = df[f'{col}_label'].unique().tolist()
-
-        # Tracking one-hot encoded columns and their resulting dummy variables
-        for col in one_hot_encoded_columns:
-            one_hot_encoded_dict[col] = df.filter(like=f'{col}_').columns.to_list()
-
-        # Tracking original values and transformed values for cyclically encoded columns
-        for col in cyclic_encoded_columns:
-            cyclic_encoded_dict[col] = {
-                'original_values': df[[f'{col}_sin', f'{col}_cos']].drop_duplicates().index.tolist(),
-                'transformed_columns': [f'{col}_sin', f'{col}_cos']
-            }
-
-        # Adding these details to the data dictionary
-        data_dict['label_encoded_columns'] = label_encoded_dict
-        data_dict['one_hot_encoded_columns'] = one_hot_encoded_dict
-        data_dict['cyclic_encoded_columns'] = cyclic_encoded_dict
+        data_dict['categories_values_per_categorical'] = category_dummies_dict
 
         # Track the date and time the data was processed
         data_dict['date'] = datetime.datetime.today().strftime('%Y/%m/%d-%H:%M:%S')
@@ -258,8 +199,8 @@ def etl_processing():
 
         # Save the data dictionary to S3
         client.put_object(
-            Bucket='mlflow',
-            Key='data_info/bike_sharing_data_info.json',
+            Bucket='data',
+            Key='data_info/bike_sharing_demand_data_info.json',
             Body=data_string
         )
 
@@ -268,21 +209,34 @@ def etl_processing():
         experiment = mlflow.set_experiment("Bike Sharing Demand")
 
         # Start a new MLflow run
-        mlflow.start_run(run_name='Feature_Engineering_' + datetime.datetime.today().strftime('%Y/%m/%d-%H:%M:%S'),
-                        experiment_id=experiment.experiment_id,
-                        tags={"experiment": "feature_engineering", "dataset": "Bike Sharing"},
-                        log_system_metrics=True)
+        mlflow.start_run(
+            run_name='ETL_run_' + datetime.datetime.today().strftime('%Y/%m/%d-%H:%M:%S'),
+            experiment_id=experiment.experiment_id,
+            tags={"experiment": "etl", "dataset": "Bike Sharing"},
+            log_system_metrics=True
+        )
         
-        # Log the processed dataset to MLflow
-        # mlflow_dataset = mlflow.data.from_pandas(df,
-        #                                         targets=target_col,
-        #                                         name="bike_sharing_processed")
+        # Log the complete data to MLflow
+        mlflow_dataset = mlflow.data.from_pandas(
+                            df,
+                            source="https://archive.ics.uci.edu/dataset/275/bike+sharing+dataset",
+                            targets=target_col,
+                            name="bike_sharing_complete"
+                        )
+
+        # Log the encoded data to MLflow
+        mlflow_dataset_encoded = mlflow.data.from_pandas(
+                                    df_encoded,
+                                    source="https://archive.ics.uci.edu/dataset/275/bike+sharing+dataset",
+                                    targets=target_col,
+                                    name="bike_sharing_processed_encoded"
+                                )
         
         # Log the data to MLflow
-        # mlflow.log_input(mlflow_dataset, context="Dataset")
-        # mlflow.log_artifact(data_processed_path, artifact_path="processed_data")
-        # mlflow.log_dict(data_dict, "bike_sharing_data_info.json")
+        mlflow.log_input(mlflow_dataset, context="Dataset")
+        mlflow.log_input(mlflow_dataset_encoded, context="Dataset")
 
+        # End the MLflow run
         mlflow.end_run()
 
     
@@ -300,23 +254,26 @@ def etl_processing():
         from airflow.models import Variable
         
         # Processed dataset path
-        data_processed_path = 's3://mlflow/data/processed/bike_sharing_processed.csv'
+        data_processed_path = 's3://data/processed/bike_sharing_demand.csv'
         
         # Read the processed dataset from S3
         data = wr.s3.read_csv(data_processed_path)
         
-        # Define X variables and target variable
-        X = data.drop(columns=['log_count'], axis=1)
-        y = data['log_count']
+        # Get the target column
+        target_col = Variable.get("target")
+        
+        # Define features and target
+        X = data.drop(columns=target_col, axis=1)
+        y = data[target_col]
         
         # Split the data into training and testing sets
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=Variable.get("test_size_bike"), random_state=42)
         
         # Save the training and testing datasets to S3
-        X_train_path = 's3://mlflow/data/train/bike_sharing_X_train.csv'
-        X_test_path = 's3://mlflow/data/test/bike_sharing_X_test.csv'
-        y_train_path = 's3://mlflow/data/train/bike_sharing_y_train.csv'
-        y_test_path = 's3://mlflow/data/test/bike_sharing_y_test.csv'
+        X_train_path = 's3://data/train/bike_sharing_demand_X_train.csv'
+        X_test_path = 's3://data/test/bike_sharing_demand_X_test.csv'
+        y_train_path = 's3://data/train/bike_sharing_demand_y_train.csv'
+        y_test_path = 's3://data/test/bike_sharing_demand_y_test.csv'
         
         wr.s3.to_csv(X_train, X_train_path, index=False)
         wr.s3.to_csv(X_test, X_test_path, index=False)
@@ -339,11 +296,10 @@ def etl_processing():
         
         from sklearn.preprocessing import StandardScaler
         
-        # Save the training and testing datasets to S3
-        X_train_path = 's3://mlflow/data/train/bike_sharing_X_train.csv'
-        X_test_path = 's3://mlflow/data/test/bike_sharing_X_test.csv'
-        
         # Read the training and testing datasets from S3
+        X_train_path = 's3://data/train/bike_sharing_demand_X_train.csv'
+        X_test_path = 's3://data/test/bike_sharing_demand_X_test.csv'
+        
         X_train = wr.s3.read_csv(X_train_path)
         X_test = wr.s3.read_csv(X_test_path)
 
@@ -359,8 +315,8 @@ def etl_processing():
         X_test_scaled = pd.DataFrame(X_test_scaled, columns=X_test.columns)
         
         # Save the scaled training and testing datasets to S3
-        X_train_scaled_path = 's3://mlflow/data/train/bike_sharing_X_train_scaled.csv'
-        X_test_scaled_path = 's3://mlflow/data/test/bike_sharing_X_test_scaled.csv'
+        X_train_scaled_path = 's3://data/train/bike_sharing_demand_X_train_scaled.csv'
+        X_test_scaled_path = 's3://data/test/bike_sharing_demand_X_test_scaled.csv'
         
         wr.s3.to_csv(X_train_scaled, X_train_scaled_path, index=False)
         wr.s3.to_csv(X_test_scaled, X_test_scaled_path, index=False)
@@ -369,8 +325,8 @@ def etl_processing():
         client = boto3.client('s3')
         
         try:
-            client.head_object(Bucket='mlflow', Key='data_info/bike_sharing_data_info.json')
-            result = client.get_object(Bucket='mlflow', Key='data_info/bike_sharing_data_info.json')
+            client.head_object(Bucket='data', Key='data_info/bike_sharing_demand_data_info.json')
+            result = client.get_object(Bucket='data', Key='data_info/bike_sharing_demand_data_info.json')
             text = result["Body"].read().decode()
             data_dict = json.loads(text)
         except botocore.exceptions.ClientError as e:
@@ -383,8 +339,8 @@ def etl_processing():
         data_string = json.dumps(data_dict, indent=2)
 
         client.put_object(
-            Bucket='mlflow',
-            Key='data_info/bike_sharing_data_info.json',
+            Bucket='data',
+            Key='data_info/bike_sharing_demand_data_info.json',
             Body=data_string
         )
 
