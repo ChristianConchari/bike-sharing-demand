@@ -12,7 +12,7 @@ Nuestra implementación incluye:
 
 - En **Apache Airflow**, un DAG que orquesta un flujo de reentrenamiento del modelo. Se compara el nuevo modelo `challenger` con el `champion` y si el primero es mejor, se actualiza a `champion`. El proceso se registra en **MLFlow**.
 
-# Instrucciones para probar el funcionamiento del proyecto
+## Instrucciones para probar el funcionamiento del proyecto
 
 1. Una vez levantado el multi-contenedor, ejecutar en Airflow el DAG `process_etl_bike_sharing_data`, de esta manera se crearán los datos en el bucket `s3://data`.
 
