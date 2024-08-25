@@ -310,40 +310,86 @@ def etl_processing():
         requirements=[ "awswrangler==3.9.1" ],
         system_site_packages=True
     )
-    def split_dataset():
+    def split_dataset() -> None:
         """
-        Generate a dataset split into a training part and a test part
+        Generate a dataset split into a training part and a test part, and save them to S3.
         """
+        # Import necessary libraries
+        import logging
         import awswrangler as wr
         from sklearn.model_selection import train_test_split
         from airflow.models import Variable
-        
-        # Processed dataset path
+
+        # Initialize logging
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger(__name__)
+
+        # Define S3 paths for processed data and train/test splits
         data_processed_path = 's3://data/processed/bike_sharing_demand.csv'
-        
-        # Read the processed dataset from S3
-        data = wr.s3.read_csv(data_processed_path)
-        
-        # Get the target column
-        target_col = Variable.get("target_col")
-        
-        # Define features and target
-        X = data.drop(columns=target_col, axis=1)
-        y = data[target_col]
-        
-        # Split the data into training and testing sets
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=Variable.get("test_size_bike"), random_state=42)
-        
-        # Save the training and testing datasets to S3
         X_train_path = 's3://data/train/bike_sharing_demand_X_train.csv'
         X_test_path = 's3://data/test/bike_sharing_demand_X_test.csv'
         y_train_path = 's3://data/train/bike_sharing_demand_y_train.csv'
         y_test_path = 's3://data/test/bike_sharing_demand_y_test.csv'
-        
-        wr.s3.to_csv(X_train, X_train_path, index=False)
-        wr.s3.to_csv(X_test, X_test_path, index=False)
-        wr.s3.to_csv(y_train, y_train_path, index=False)
-        wr.s3.to_csv(y_test, y_test_path, index=False)
+
+        logger.info(f"Starting to read processed dataset from {data_processed_path}")
+
+        try:
+            # Read the processed dataset from S3
+            data = wr.s3.read_csv(data_processed_path)
+            logger.info(f"Processed dataset loaded successfully from {data_processed_path}")
+        except Exception as e:
+            logger.error(f"Failed to load processed dataset from {data_processed_path}: {e}")
+            raise
+
+        try:
+            # Get the target column from Airflow Variable
+            target_col = Variable.get("target_col")
+            logger.info(f"Target column for the dataset: {target_col}")
+        except Exception as e:
+            logger.error(f"Failed to get target column from Airflow Variable: {e}")
+            raise
+
+        try:
+            # Define features and target
+            X = data.drop(columns=target_col, axis=1)
+            y = data[target_col]
+            logger.info("Features and target separated successfully")
+        except Exception as e:
+            logger.error(f"Failed to separate features and target: {e}")
+            raise
+
+        try:
+            # Get test size from Airflow Variable
+            test_size = float(Variable.get("test_size_bike"))
+            logger.info(f"Test size for dataset split: {test_size}")
+
+            # Split the data into training and testing sets
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+            logger.info("Dataset split into training and testing sets successfully")
+        except Exception as e:
+            logger.error(f"Failed to split dataset: {e}")
+            raise
+
+        logger.info("Starting to save training and testing datasets to S3")
+
+        try:
+            # Save the training and testing datasets to S3
+            wr.s3.to_csv(X_train, X_train_path, index=False)
+            logger.info(f"Training features saved successfully to {X_train_path}")
+            
+            wr.s3.to_csv(X_test, X_test_path, index=False)
+            logger.info(f"Testing features saved successfully to {X_test_path}")
+
+            wr.s3.to_csv(y_train, y_train_path, index=False)
+            logger.info(f"Training target saved successfully to {y_train_path}")
+
+            wr.s3.to_csv(y_test, y_test_path, index=False)
+            logger.info(f"Testing target saved successfully to {y_test_path}")
+        except Exception as e:
+            logger.error(f"Failed to save training or testing datasets to S3: {e}")
+            raise
+
+        logger.info("Dataset splitting and saving completed successfully")
 
     @task.virtualenv(
         task_id='normalize_data',
