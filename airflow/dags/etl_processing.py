@@ -98,7 +98,7 @@ def etl_processing():
             df = pd.get_dummies(df, columns=one_hot_cols, drop_first=True, dtype=int)
             return df
 
-        def cyclic_encode(df: pd.DataFrame, columns: list, max_value: int) -> pd.DataFrame:
+        def cyclic_encode(df: pd.DataFrame, columns: list, max_value: int = 23) -> pd.DataFrame:
             """
             Applies cyclic encoding to specified columns of a DataFrame.
             
@@ -133,17 +133,8 @@ def etl_processing():
         # Normalize count column by taking the log
         df['log_cnt'] = np.log(df['cnt'])
         
-        # Calculate the correlation matrix
-        corr = df.corr()
-        
-        # Find pairs of columns with high correlation
-        high_corr_pairs = [
-            (col1, col2) for col1 in corr.columns for col2 in corr.columns 
-            if col1 != col2 and abs(corr.loc[col1, col2]) > 0.85 
-        ]
-        
         # Mantain only selected features
-        selected_columns = Variable.get("features")
+        selected_columns = ['season', 'yr', 'hr', 'holiday', 'weekday', 'workingday', 'weathersit', 'temp', 'hum', 'windspeed']
         df = df[selected_columns + ['log_cnt']]
 
         # Define lists for tracking encoded columns
@@ -174,7 +165,7 @@ def etl_processing():
                 raise e
 
         # Get the target column and drop it from the dataset
-        target_col = Variable.get("target")
+        target_col = Variable.get("target_col")
         dataset_log = df.drop(columns=target_col)
         dataset_encoded_log = df_encoded.drop(columns=target_col)
         
@@ -191,7 +182,7 @@ def etl_processing():
         for category in one_hot_encoded_columns + cyclic_encoded_columns:
             category_encoded_dict[category] = np.sort(dataset_log[category].unique()).tolist()
 
-        data_dict['categories_values_per_categorical'] = category_dummies_dict
+        data_dict['categories_values_per_categorical'] = category_encoded_dict
 
         # Track the date and time the data was processed
         data_dict['date'] = datetime.datetime.today().strftime('%Y/%m/%d-%H:%M:%S')
@@ -260,7 +251,7 @@ def etl_processing():
         data = wr.s3.read_csv(data_processed_path)
         
         # Get the target column
-        target_col = Variable.get("target")
+        target_col = Variable.get("target_col")
         
         # Define features and target
         X = data.drop(columns=target_col, axis=1)
