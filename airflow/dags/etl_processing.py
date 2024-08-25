@@ -396,79 +396,135 @@ def etl_processing():
         requirements=[ "awswrangler==3.9.1" ],
         system_site_packages=True
     )
-    def normalize_data():
+    def normalize_data() -> None:
+        """
+        Normalize the training and testing datasets using StandardScaler and save the scaled datasets to S3.
+        Additionally, log scaler parameters and dataset information to MLflow.
+        """
+        # Import necessary libraries
+        import logging
         import json
         import mlflow
         import boto3
         import botocore.exceptions
-        
         import pandas as pd
         import awswrangler as wr
-        
         from sklearn.preprocessing import StandardScaler
-        
-        # Read the training and testing datasets from S3
+
+        # Initialize logging
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger(__name__)
+
+        # Define S3 paths for train/test data and scaled data
         X_train_path = 's3://data/train/bike_sharing_demand_X_train.csv'
         X_test_path = 's3://data/test/bike_sharing_demand_X_test.csv'
-        
-        X_train = wr.s3.read_csv(X_train_path)
-        X_test = wr.s3.read_csv(X_test_path)
-
-        # Initialize the scaler
-        scaler = StandardScaler(with_mean=True, with_std=True)
-        
-        # Fit the scaler on the training data
-        X_train_scaled = scaler.fit_transform(X_train)
-        X_test_scaled = scaler.transform(X_test)
-        
-        # Conver to DataFrame
-        X_train_scaled = pd.DataFrame(X_train_scaled, columns=X_train.columns)
-        X_test_scaled = pd.DataFrame(X_test_scaled, columns=X_test.columns)
-        
-        # Save the scaled training and testing datasets to S3
         X_train_scaled_path = 's3://data/train/bike_sharing_demand_X_train_scaled.csv'
         X_test_scaled_path = 's3://data/test/bike_sharing_demand_X_test_scaled.csv'
-        
-        wr.s3.to_csv(X_train_scaled, X_train_scaled_path, index=False)
-        wr.s3.to_csv(X_test_scaled, X_test_scaled_path, index=False)
-        
-        # Save information about the scaler
-        client = boto3.client('s3')
-        
+
+        logger.info("Starting to read training and testing datasets from S3")
+
         try:
-            client.head_object(Bucket='data', Key='data_info/bike_sharing_demand_data_info.json')
-            result = client.get_object(Bucket='data', Key='data_info/bike_sharing_demand_data_info.json')
-            text = result["Body"].read().decode()
-            data_dict = json.loads(text)
-        except botocore.exceptions.ClientError as e:
-            if e.response['Error']['Code'] != "404":
-                raise e
+            # Read the training and testing datasets from S3
+            X_train = wr.s3.read_csv(X_train_path)
+            X_test = wr.s3.read_csv(X_test_path)
+            logger.info("Training and testing datasets loaded successfully from S3")
+        except Exception as e:
+            logger.error(f"Failed to load training or testing datasets from S3: {e}")
+            raise
 
-        # Upload JSON String to an S3 Object
-        data_dict['standard_scaler_mean'] = scaler.mean_.tolist()
-        data_dict['standard_scaler_std'] = scaler.scale_.tolist()
-        data_string = json.dumps(data_dict, indent=2)
+        logger.info("Initializing the StandardScaler")
 
-        client.put_object(
-            Bucket='data',
-            Key='data_info/bike_sharing_demand_data_info.json',
-            Body=data_string
-        )
+        try:
+            # Initialize the scaler
+            scaler = StandardScaler(with_mean=True, with_std=True)
 
-        # Log the data dictionary to MLflow
-        mlflow.set_tracking_uri('http://mlflow:5000')
-        experiment = mlflow.set_experiment("Bike Sharing Demand")
+            # Fit the scaler on the training data and transform both train and test sets
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_test_scaled = scaler.transform(X_test)
+            logger.info("Data normalization completed successfully using StandardScaler")
+        except Exception as e:
+            logger.error(f"Failed during data normalization with StandardScaler: {e}")
+            raise
 
-        # Obtain the last experiment run_id to log the new information
-        list_run = mlflow.search_runs([experiment.experiment_id], output_format="list")
+        try:
+            # Convert scaled data to DataFrame
+            X_train_scaled = pd.DataFrame(X_train_scaled, columns=X_train.columns)
+            X_test_scaled = pd.DataFrame(X_test_scaled, columns=X_test.columns)
+            logger.info("Scaled data successfully converted to DataFrame")
+        except Exception as e:
+            logger.error(f"Failed to convert scaled data to DataFrame: {e}")
+            raise
 
-        with mlflow.start_run(run_id=list_run[0].info.run_id):
+        logger.info("Starting to save scaled training and testing datasets to S3")
 
-            mlflow.log_param("Train observations", X_train_scaled.shape[0])
-            mlflow.log_param("Test observations", X_test_scaled.shape[0])
-            mlflow.log_param("Standard Scaler feature names", scaler.feature_names_in_)
-            mlflow.log_param("Standard Scaler mean values", scaler.mean_)
-            mlflow.log_param("Standard Scaler scale values", scaler.scale_)
+        try:
+            # Save the scaled training and testing datasets to S3
+            wr.s3.to_csv(X_train_scaled, X_train_scaled_path, index=False)
+            logger.info(f"Scaled training data saved successfully to {X_train_scaled_path}")
+
+            wr.s3.to_csv(X_test_scaled, X_test_scaled_path, index=False)
+            logger.info(f"Scaled testing data saved successfully to {X_test_scaled_path}")
+        except Exception as e:
+            logger.error(f"Failed to save scaled datasets to S3: {e}")
+            raise
+
+        logger.info("Updating dataset information with scaler details")
+
+        try:
+            # Initialize S3 client and attempt to load existing data info
+            client = boto3.client('s3')
+            data_dict = {}
+            try:
+                client.head_object(Bucket='data', Key='data_info/bike_sharing_demand_data_info.json')
+                result = client.get_object(Bucket='data', Key='data_info/bike_sharing_demand_data_info.json')
+                text = result["Body"].read().decode()
+                data_dict = json.loads(text)
+                logger.info("Existing dataset information loaded from S3")
+            except botocore.exceptions.ClientError as e:
+                if e.response['Error']['Code'] == "404":
+                    logger.info("No existing dataset information found, initializing new info dictionary")
+                else:
+                    logger.error(f"Failed to fetch dataset information: {e}")
+                    raise
+
+            # Update data dictionary with scaler information
+            data_dict['standard_scaler_mean'] = scaler.mean_.tolist()
+            data_dict['standard_scaler_std'] = scaler.scale_.tolist()
+            data_string = json.dumps(data_dict, indent=2)
+
+            # Save updated data dictionary back to S3
+            client.put_object(
+                Bucket='data',
+                Key='data_info/bike_sharing_demand_data_info.json',
+                Body=data_string
+            )
+            logger.info("Dataset information updated successfully in S3 with scaler details")
+        except Exception as e:
+            logger.error(f"Failed to update dataset information in S3: {e}")
+            raise
+
+        logger.info("Logging scaler details and dataset info to MLflow")
+
+        try:
+            # Log the data dictionary to MLflow
+            mlflow.set_tracking_uri('http://mlflow:5000')
+            experiment = mlflow.set_experiment("Bike Sharing Demand")
+
+            # Obtain the last experiment run_id to log the new information
+            list_run = mlflow.search_runs([experiment.experiment_id], output_format="list")
+
+            with mlflow.start_run(run_id=list_run[0].info.run_id):
+                mlflow.log_param("Train observations", X_train_scaled.shape[0])
+                mlflow.log_param("Test observations", X_test_scaled.shape[0])
+                mlflow.log_param("Standard Scaler feature names", scaler.feature_names_in_)
+                mlflow.log_param("Standard Scaler mean values", scaler.mean_)
+                mlflow.log_param("Standard Scaler scale values", scaler.scale_)
+            logger.info("Scaler details and dataset info logged to MLflow successfully")
+        except Exception as e:
+            logger.error(f"Failed to log scaler details and dataset info to MLflow: {e}")
+            raise
+
+        logger.info("Data normalization process completed successfully")
     
     get_data() >> feature_engineering() >> split_dataset() >> normalize_data()
     
