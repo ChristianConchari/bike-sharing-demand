@@ -174,6 +174,8 @@ def etl_processing():
         data_dict['columns_encoded'] = dataset_encoded_log.columns.to_list()
         data_dict['target_col'] = target_col
         data_dict['categorical_columns'] = one_hot_encoded_columns + cyclic_encoded_columns
+        data_dict['one_hot_encoded_columns'] = one_hot_encoded_columns
+        data_dict['cyclic_encoded_columns'] = cyclic_encoded_columns
         data_dict['columns_dtypes'] = {k: str(v) for k, v in dataset_encoded_log.dtypes.to_dict().items()}
 
         category_encoded_dict = {}
