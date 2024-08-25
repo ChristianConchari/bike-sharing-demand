@@ -526,7 +526,14 @@ def etl_processing():
 
         logger.info("Data normalization process completed successfully")
     
+    # Set up task dependencies with logging
+    logger.info("Setting up task dependencies for the DAG")
+    
+    # Define the order of tasks in the DAG
     get_data() >> feature_engineering() >> split_dataset() >> normalize_data()
     
+    logger.info("Task dependencies set up successfully")
+    
+# Initialize the DAG
 dag = etl_processing()
         
