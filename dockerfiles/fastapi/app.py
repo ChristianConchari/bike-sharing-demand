@@ -159,7 +159,7 @@ class ReloadModelInput(BaseModel):
         schema_extra = {
             "example": {
                 "reload_model_name": "bike_sharing_model_prod",
-                "alias": "best-model"
+                "alias": "champion"
             }
         }
 
@@ -186,7 +186,7 @@ class ModelOutput(BaseModel):
         }
     }
 
-model, version_model, data_dictionary = load_model("bike_sharing_model_prod", "best-model")
+model, version_model, data_dictionary = load_model("bike_sharing_model_prod", "champion")
 
 app = FastAPI()
 
