@@ -89,9 +89,16 @@ def retrain_the_model():
                 logger.error(f"Failed to load training or testing data from S3: {e}")
                 raise
         
-        def mlflow_track_experiment(model, X_train):
+        def mlflow_track_experiment(model: object, X_train: np.ndarray) -> str:
             """
             Log the experiment details to MLflow.
+            
+            Parameters:
+            - model (object): The machine learning model to be logged.
+            - X_train (np.ndarray): The training data used for fitting the model.
+            
+            Returns:
+            - str: The URI of the logged model artifact in MLflow.
             """
             logger.info("Logging experiment details to MLflow")
             try:
@@ -122,9 +129,15 @@ def retrain_the_model():
                 logger.error(f"Failed to log experiment details to MLflow: {e}")
                 raise
     
-        def register_challenger(model, r2, rmse, model_uri):
+        def register_challenger(model: object, r2: float, rmse: float, model_uri: str) -> None:
             """
-            Register the challenger model in MLflow model registry.
+            Register the challenger model in the MLflow model registry.
+            
+            Parameters:
+            - model (object): The machine learning model to register.
+            - r2 (float): The R-squared score of the model.
+            - rmse (float): The Root Mean Squared Error (RMSE) of the model.
+            - model_uri (str): The URI of the model artifact in MLflow.
             """
             logger.info("Registering challenger model in MLflow")
             try:
