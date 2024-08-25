@@ -202,80 +202,141 @@ def retrain_the_model():
         system_site_packages=True,
     )
     def evaluate_champion_challenge():
+        """
+        Evaluate the performance of the champion and challenger models on the test dataset.
+        Log the performance metrics to MLflow and promote or demote the challenger model based on performance.
+        """
+        import logging
         import mlflow
         import awswrangler as wr
+        from sklearn.metrics import mean_squared_error, r2_score
         
-        from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+        # Initialize logging
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger(__name__)
         
+        # Set up MLflow tracking URI
         mlflow.set_tracking_uri("http://mlflow:5000")
         
-        def load_model(alias):
-            model_name = 'bike_sharing_model_prod'
-            
-            client = mlflow.MlflowClient()
-            model_data = client.get_model_version_by_alias(model_name, alias)
-            
-            model = mlflow.sklearn.load_model(model_data.source)
-            
-            return model
+        def load_model(alias: str) -> object:
+            """
+            Load a model from MLflow registry by alias.
+
+            Parameters:
+            - alias (str): The alias of the model version to load (e.g., 'champion' or 'challenger').
+
+            Returns:
+            - object: The loaded machine learning model.
+            """
+            logger.info(f"Loading model with alias '{alias}' from MLflow registry")
+            try:
+                model_name = 'bike_sharing_model_prod'
+                client = mlflow.MlflowClient()
+                model_data = client.get_model_version_by_alias(model_name, alias)
+                model = mlflow.sklearn.load_model(model_data.source)
+                logger.info(f"Model '{alias}' loaded successfully from MLflow")
+                return model
+            except Exception as e:
+                logger.error(f"Failed to load model '{alias}': {e}")
+                raise
         
         def load_the_test_data() -> tuple:
-            X_test = wr.s3.read_csv("s3://data/test/bike_sharing_demand_X_test_scaled.csv").values
-            y_test = wr.s3.read_csv("s3://data/test/bike_sharing_demand_y_test.csv").values.ravel()
-            
-            return X_test, y_test
+            """
+            Load the test dataset from S3.
+
+            Returns:
+            - tuple: A tuple containing the test features (X_test) and test target (y_test).
+            """
+            logger.info("Loading test dataset from S3")
+            try:
+                X_test = wr.s3.read_csv("s3://data/test/bike_sharing_demand_X_test_scaled.csv").values
+                y_test = wr.s3.read_csv("s3://data/test/bike_sharing_demand_y_test.csv").values.ravel()
+                logger.info("Test dataset loaded successfully from S3")
+                return X_test, y_test
+            except Exception as e:
+                logger.error(f"Failed to load test data from S3: {e}")
+                raise
         
-        def promote_challenger(name):
-            client = mlflow.MlflowClient()
-            
-            client.delete_registered_model(name, "champion")
-            
-            challenger_version = client.get_model_version_by_alias(name, "challenger")
-            
-            client.delete_registered_model_alias(name, "challenger")
+        def promote_challenger(name: str) -> None:
+            """
+            Promote the challenger model to champion in the MLflow registry.
 
-            client.set_registered_model_alias(name, "champion", challenger_version.version)
+            Parameters:
+            - name (str): The name of the model in the MLflow registry.
+            """
+            logger.info("Promoting challenger model to champion")
+            try:
+                client = mlflow.MlflowClient()
+                client.delete_registered_model_alias(name, "champion")
+                challenger_version = client.get_model_version_by_alias(name, "challenger")
+                client.delete_registered_model_alias(name, "challenger")
+                client.set_registered_model_alias(name, "champion", challenger_version.version)
+                logger.info("Challenger model promoted to champion successfully")
+            except Exception as e:
+                logger.error(f"Failed to promote challenger model: {e}")
+                raise
             
-        def demote_challenger(name):
+        def demote_challenger(name: str) -> None:
+            """
+            Demote the challenger model by removing its alias in the MLflow registry.
 
-            client = mlflow.MlflowClient()
-
-            client.delete_registered_model_alias(name, "challenger")
+            Parameters:
+            - name (str): The name of the model in the MLflow registry.
+            """
+            logger.info("Demoting challenger model")
+            try:
+                client = mlflow.MlflowClient()
+                client.delete_registered_model_alias(name, "challenger")
+                logger.info("Challenger model demoted successfully")
+            except Exception as e:
+                logger.error(f"Failed to demote challenger model: {e}")
+                raise
             
+        # Load models and test data
         champion_model = load_model("champion")
-        
         challenger_model = load_model("challenger")
-        
         X_test, y_test = load_the_test_data()
         
-        champion_y_pred = champion_model.predict(X_test)
-        challenger_y_pred = challenger_model.predict(X_test)
+        logger.info("Evaluating performance of champion and challenger models")
         
-        champion_r2 = r2_score(y_test, champion_y_pred)
-        challenger_r2 = r2_score(y_test, challenger_y_pred)
+        try:
+            # Evaluate models
+            champion_y_pred = champion_model.predict(X_test)
+            challenger_y_pred = challenger_model.predict(X_test)
+
+            # Calculate performance metrics
+            champion_r2 = r2_score(y_test, champion_y_pred)
+            challenger_r2 = r2_score(y_test, challenger_y_pred)
+            champion_rmse = mean_squared_error(y_test, champion_y_pred, squared=False)
+            challenger_rmse = mean_squared_error(y_test, challenger_y_pred, squared=False)
+
+            logger.info(f"Champion model performance: R2={champion_r2}, RMSE={champion_rmse}")
+            logger.info(f"Challenger model performance: R2={challenger_r2}, RMSE={challenger_rmse}")
+        except Exception as e:
+            logger.error(f"Failed to evaluate model performance: {e}")
+            raise
         
-        champion_rmse = mean_squared_error(y_test, champion_y_pred)
-        challenger_rmse = mean_squared_error(y_test, challenger_y_pred)
-        
-        experiment = mlflow.set_experiment("Bike Sharing Demand")
-        
-        list_run = mlflow.search_runs([experiment.experiment_id], output_format="list")
-        
-        with mlflow.start_run(run_id=list_run[0].info.run_id):
-            mlflow.log_metric("test_r2_champion", champion_r2)
-            mlflow.log_metric("test_r2_challenger", challenger_r2)
+        # Log performance metrics to MLflow
+        try:
+            experiment = mlflow.set_experiment("Bike Sharing Demand")
+            list_run = mlflow.search_runs([experiment.experiment_id], output_format="list")
+            with mlflow.start_run(run_id=list_run[0].info.run_id):
+                mlflow.log_metric("test_r2_champion", champion_r2)
+                mlflow.log_metric("test_r2_challenger", challenger_r2)
+                mlflow.log_metric("test_rmse_champion", champion_rmse)
+                mlflow.log_metric("test_rmse_challenger", challenger_rmse)
+            logger.info("Performance metrics logged to MLflow successfully")
+        except Exception as e:
+            logger.error(f"Failed to log metrics to MLflow: {e}")
+            raise
             
-            mlflow.log_metric("test_rmse_champion", champion_rmse)
-            mlflow.log_metric("test_rmse_challenger", challenger_rmse)
-            
-    
+        # Compare models and promote or demote challenger
         name = "bike_sharing_model_prod"
-        
         if challenger_r2 > champion_r2 and challenger_rmse < champion_rmse:
-            print("Challenger model is better than the champion model")
+            logger.info("Challenger model is better than the champion model")
             promote_challenger(name)
         else:
-            print("Challenger model is not better than the champion model")
+            logger.info("Challenger model is not better than the champion model")
             demote_challenger(name)
             
     train_challenger_model() >> evaluate_champion_challenge()
