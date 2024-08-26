@@ -59,7 +59,7 @@ hiperparámetros y entrenar el mejor modelo.
 
 3. Utilizar el servicio de API corriendo en [Bike Sharing Demand](http://localhost:8800), también se puede acceder a la documentación de la API en [Bike Sharing Demand - Docs](http://localhost:8800/docs).
 
-4. Ejecutar el DAG `retrain_the_model` en Apache Airflow para reentrenar el modelo y comparar si un nuevo modelo entrenado es mejor que el actual. Si es así, se actualizará el modelo `champion`.
+4. Ejecutar el DAG `retrain_the_model` en Apache Airflow para reentrenar el modelo y comparar si un nuevo modelo entrenado es mejor que el actual. Si es así, se actualizará el modelo `champion`. Es importante mencionar que se debe volver a correr el DAG `process_etl_bike_sharing_data` para volver a obtener los datos de entrenamiento, antes de ejecutar el DAG `retrain_the_model`, para que el nuevo modelo se entrene con nuevos datos y tenga posibilidad de sobrepasar al modelo `champion` anterior.
 
 ## Integrantes
 - **Christian Ricardo Conchari Cabrera** - chrisconchari@gmail.com
