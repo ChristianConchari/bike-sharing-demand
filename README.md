@@ -2,6 +2,8 @@
 
 Este repositorio contiene el trabajo práctico final de la materia Aprendizaje de Máquina II de la Especialización en Inteligencia Artificial (CEIA) de la Facultad de Ingeniería de la Universidad de Buenos Aires (FIUBA). El objetivo es implementar un modelo productivo para predecir la demanda de bicicletas dado un conjunto de datos de datos históricos. El dataset utilizado es el [Bike Sharing Demand - UCI Machine Learning Repository](https://archive.ics.uci.edu/ml/datasets/Bike+Sharing+Dataset).
 
+#### El video demostrativo del funcionaiento del proyecto se encuentra en el siguiente [link](https://youtu.be/mq8LHZM73UM?si=BUXOC1NrGS7a6jWh)
+
 Nuestra implementación incluye:
 
 - En **Apache Airflow**, un DAG que orquesta el flujo de extracción, transformación y carga de los datos en un bucket de S3 (Minio) `s3://data`. También se utiliza **MLFlow** para el seguimiento de estos procesos.
